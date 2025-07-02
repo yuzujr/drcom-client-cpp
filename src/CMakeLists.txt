@@ -1,0 +1,15 @@
+file(GLOB_RECURSE SOURCE_FILES "*.cpp")
+
+add_executable(drcom_client ${SOURCE_FILES})
+
+target_include_directories(drcom_client PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+# Install targets
+install(TARGETS drcom_client
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/drcom DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
