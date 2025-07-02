@@ -59,7 +59,7 @@ private:
 #endif
     
 public:
-    MockDrcomServer(int port = 61440) : running_(false), client_authenticated_(false) {
+    MockDrcomServer(int port = 61441) : running_(false), client_authenticated_(false) {
         // 初始化随机数生成器
         std::random_device rd;
         std::mt19937 gen(rd());
@@ -333,7 +333,7 @@ private:
 };
 
 int main(int argc, char* argv[]) {
-    int port = 61440;
+    int port = 61441;
     
     if (argc > 1) {
         port = std::atoi(argv[1]);

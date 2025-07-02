@@ -19,27 +19,27 @@ public:
     
     // User configuration
     struct UserConfig {
-        std::string username{"xiaoming22"};
-        std::string password{"xiaoming123456"};
-        std::string ip{"192.168.1.100"};
-        std::array<uint8_t, 6> mac{{0x00, 0x00, 0x00, 0x00, 0x00, 0x00}};
-        std::string hostname{"drcom-client"};
-        std::string os_info{"Windows 10"};
-        std::string primary_dns{"0.0.0.0"};
-        std::string dhcp_server{"0.0.0.0"};
+        std::string username;
+        std::string password;
+        std::string ip;
+        std::array<uint8_t, 6> mac;
+        std::string hostname;
+        std::string os_info;
+        std::string primary_dns;
+        std::string dhcp_server;
     };
     
     // Server configuration
     struct ServerConfig {
-        std::string ip{"10.100.61.3"};
-        uint16_t port{61440};
+        std::string ip;
+        uint16_t port;
     };
     
     // Client configuration  
     struct ClientConfig {
-        std::string ip{"0.0.0.0"};  // bind to any interface
-        uint16_t port{61440};
-        bool debug_enabled{true};
+        std::string ip;  // bind to any interface
+        uint16_t port;
+        bool debug_enabled;
     };
     
     // Protocol configuration

@@ -69,7 +69,8 @@ int main(int argc, char* argv[]) {
         // Load configuration
         auto& config = drcom::Config::getInstance();
         if (!config.loadFromFile(config_file)) {
-            logger.warn("Could not load config file '{}', using defaults", config_file);
+            logger.error("Could not load config file '{}'", config_file);
+            return 1;
         }
         
         if (!config.validate()) {
