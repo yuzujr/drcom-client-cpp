@@ -27,6 +27,9 @@ cmake ..
 
 # 编译
 cmake --build . --config Release -j
+
+# 安装
+cmake --build . --target install
 ```
 
 编译完成后，可执行文件位于：
