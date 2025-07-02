@@ -1,5 +1,5 @@
 .cache/
 .github/
-.jj/
+.vscode/
 build/
 compile_commands.json

@@ -35,7 +35,7 @@ enum class ClientState {
     AUTHENTICATED,
     KEEPALIVE,
     DISCONNECTING,
-    ERROR
+    CLIENT_ERROR  // 重命名以避免与Windows ERROR宏冲突
 };
 
 /**

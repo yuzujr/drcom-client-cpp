@@ -1,3 +1,8 @@
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#endif
+
 #include "drcom/client.h"
 #include "drcom/config.h"
 #include "drcom/logger.h"
@@ -20,7 +25,7 @@ const char* clientStateToString(ClientState state) {
         case ClientState::AUTHENTICATED:  return "AUTHENTICATED";
         case ClientState::KEEPALIVE:      return "KEEPALIVE";
         case ClientState::DISCONNECTING:  return "DISCONNECTING";
-        case ClientState::ERROR:          return "ERROR";
+        case ClientState::CLIENT_ERROR:   return "ERROR";
         default:                          return "UNKNOWN";
     }
 }
@@ -61,7 +66,7 @@ bool DrcomClient::connect() {
         // Initialize network if needed
         if (!NetworkManager::getInstance().isInitialized()) {
             logger_.error("Network initialization failed");
-            setState(ClientState::ERROR);
+            setState(ClientState::CLIENT_ERROR);
             return false;
         }
         
@@ -70,7 +75,7 @@ bool DrcomClient::connect() {
         auto bind_result = socket_->bind(local_addr);
         if (bind_result) {
             logger_.error("Failed to bind to local address: {}", bind_result.message());
-            setState(ClientState::ERROR);
+            setState(ClientState::CLIENT_ERROR);
             return false;
         }
         
@@ -79,7 +84,7 @@ bool DrcomClient::connect() {
         auto connect_result = socket_->connect(server_addr);
         if (connect_result) {
             logger_.error("Failed to connect to server: {}", connect_result.message());
-            setState(ClientState::ERROR);
+            setState(ClientState::CLIENT_ERROR);
             return false;
         }
         
@@ -88,13 +93,13 @@ bool DrcomClient::connect() {
         // Perform challenge and login
         if (!performChallenge(true)) {
             logger_.error("Challenge failed");
-            setState(ClientState::ERROR);
+            setState(ClientState::CLIENT_ERROR);
             return false;
         }
         
         if (!performLogin()) {
             logger_.error("Login failed");
-            setState(ClientState::ERROR);
+            setState(ClientState::CLIENT_ERROR);
             return false;
         }
         
@@ -111,7 +116,7 @@ bool DrcomClient::connect() {
         
     } catch (const std::exception& e) {
         logger_.error("Exception during connection: {}", e.what());
-        setState(ClientState::ERROR);
+        setState(ClientState::CLIENT_ERROR);
         notifyEvent(ClientEvent::NETWORK_ERROR, e.what());
         return false;
     }
@@ -147,7 +152,7 @@ bool DrcomClient::disconnect() {
         
     } catch (const std::exception& e) {
         logger_.error("Exception during disconnection: {}", e.what());
-        setState(ClientState::ERROR);
+        setState(ClientState::CLIENT_ERROR);
         return false;
     }
 }
@@ -403,7 +408,7 @@ std::vector<uint8_t> DrcomClient::buildLoginPacket() {
     std::copy(md5a.begin(), md5a.end(), md5_password_.begin());
     
     // Username (36 bytes)
-    const size_t username_copy_len = std::min(user_config.username.length(), size_t(36));
+    const size_t username_copy_len = std::min(user_config.username.length(), static_cast<size_t>(36));
     std::copy(user_config.username.begin(), 
               user_config.username.begin() + username_copy_len, 
               packet.begin() + 20);
@@ -445,7 +450,7 @@ std::vector<uint8_t> DrcomClient::buildLoginPacket() {
     packet[105] = protocol_config.ip_dog;
     
     // Hostname (32 bytes max)
-    const size_t hostname_len = std::min(user_config.hostname.length(), size_t(32));
+    const size_t hostname_len = std::min(user_config.hostname.length(), static_cast<size_t>(32));
     std::copy(user_config.hostname.begin(), 
               user_config.hostname.begin() + hostname_len, 
               packet.begin() + 110);
@@ -472,7 +477,7 @@ std::vector<uint8_t> DrcomClient::buildLoginPacket() {
     packet[191] = protocol_config.auth_version[1];
     
     // OS info (54 bytes max, zero padded)
-    const size_t os_info_len = std::min(user_config.os_info.length(), size_t(54));
+    const size_t os_info_len = std::min(user_config.os_info.length(), static_cast<size_t>(54));
     std::copy(user_config.os_info.begin(), 
               user_config.os_info.begin() + os_info_len, 
               packet.begin() + 192);
@@ -497,7 +502,7 @@ std::vector<uint8_t> DrcomClient::buildLogoutPacket() {
     std::copy(md5_password_.begin(), md5_password_.end(), packet.begin() + 4);
     
     // Username (36 bytes at offset 20-55)
-    const size_t username_copy_len = std::min(user_config.username.length(), size_t(36));
+    const size_t username_copy_len = std::min(user_config.username.length(), static_cast<size_t>(36));
     std::copy(user_config.username.begin(), 
               user_config.username.begin() + username_copy_len, 
               packet.begin() + 20);

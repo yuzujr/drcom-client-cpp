@@ -5,6 +5,8 @@
 
 // 跨平台网络支持
 #ifdef _WIN32
+    #define WIN32_LEAN_AND_MEAN
+    #define NOMINMAX
     #include <winsock2.h>
     #include <ws2tcpip.h>
     #pragma comment(lib, "ws2_32.lib")
@@ -133,7 +135,7 @@ private:
         client_addr_len_ = sizeof(client_addr_);
         
         while (running_) {
-            ssize_t received = recvfrom(socket_fd_, buffer, sizeof(buffer), 0,
+            ssize_t received = recvfrom(socket_fd_, reinterpret_cast<char*>(buffer), sizeof(buffer), 0,
                                       (struct sockaddr*)&client_addr_, &client_addr_len_);
             
             if (received > 0) {
@@ -303,7 +305,7 @@ private:
     }
     
     void sendResponse(const std::vector<uint8_t>& response) {
-        ssize_t sent = sendto(socket_fd_, response.data(), response.size(), 0,
+        ssize_t sent = sendto(socket_fd_, reinterpret_cast<const char*>(response.data()), response.size(), 0,
                             (struct sockaddr*)&client_addr_, client_addr_len_);
         
         if (sent > 0) {
