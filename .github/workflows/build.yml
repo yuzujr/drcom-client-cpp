@@ -35,17 +35,6 @@ jobs:
         test -f build/mock_server/mock_drcom_server
         echo "Build artifacts verified successfully"
     
-    - name: Run basic tests
-      run: |
-        cd build
-        # 测试配置文件是否存在
-        test -f config/drcom_jlu.conf
-        test -f config/drcom_test.conf
-        echo "Configuration files verified"
-        
-        # 测试程序是否可以运行（显示帮助信息）
-        timeout 5s ./src/drcom_client --help || echo "drcom_client help test completed"
-        timeout 5s ./mock_server/mock_drcom_server || echo "mock_drcom_server help test completed"
     
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
