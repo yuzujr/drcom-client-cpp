@@ -23,12 +23,12 @@
 mkdir build && cd build
 
 # 配置项目
-cmake ..
+cmake .. -DCMAKE_BUILD_TYPE=Release (-DCMAKE_INSTALL_PREFIX="安装目录")(可选)
 
 # 编译
 cmake --build . --config Release -j
 
-# 安装
+# 安装（可选）
 cmake --build . --target install
 ```
 

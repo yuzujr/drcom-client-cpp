@@ -13,6 +13,13 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 include(GNUInstallDirs)
+
+# 设置自定义安装目录
+set(DRCOM_INSTALL_DIR "drcom-client-cpp")
+
 add_subdirectory(src)
 add_subdirectory(mock_server)
-install(DIRECTORY ${CMAKE_SOURCE_DIR}/config DESTINATION ${CMAKE_INSTALL_PREFIX})
+
+# 安装配置文件到自定义目录
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/config 
+        DESTINATION ${DRCOM_INSTALL_DIR})
