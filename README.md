@@ -3,7 +3,7 @@
 一个用 C++ 编写的 DRCOM 校园网认证客户端，支持吉林大学校园网认证。
 基于[jlu-drcom-client](https://github.com/AndrewLawrence80/jlu-drcom-client)，
 主要改动：
-- Linux -> Linux、Windows
+- POSIX -> POSIX、Windows
 - 硬编码 -> 配置文件
 - C语言 -> C++20
 - make -> cmake
