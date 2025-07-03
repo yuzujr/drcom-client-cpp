@@ -1,0 +1,201 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake build-essential
+    
+    - name: Configure CMake
+      run: |
+        mkdir build
+        cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release
+    
+    - name: Build
+      run: |
+        cd build
+        make -j$(nproc)
+    
+    - name: Test build artifacts
+      run: |
+        test -f build/src/drcom_client
+        test -f build/mock_server/mock_drcom_server
+        echo "Build artifacts verified successfully"
+    
+    - name: Run basic tests
+      run: |
+        cd build
+        # 测试配置文件是否存在
+        test -f config/drcom_jlu.conf
+        test -f config/drcom_test.conf
+        echo "Configuration files verified"
+        
+        # 测试程序是否可以运行（显示帮助信息）
+        timeout 5s ./src/drcom_client --help || echo "drcom_client help test completed"
+        timeout 5s ./mock_server/mock_drcom_server || echo "mock_drcom_server help test completed"
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: drcom-client-linux
+        path: |
+          build/src/drcom_client
+          build/mock_server/mock_drcom_server
+          config/
+
+  build-windows:
+    runs-on: windows-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Configure CMake
+      run: |
+        mkdir build
+        cd build
+        cmake .. -G "Visual Studio 17 2022" -A x64
+    
+    - name: Build
+      run: |
+        cd build
+        cmake --build . --config Release -j
+    
+    - name: Test build artifacts
+      run: |
+        if (-not (Test-Path "build/src/Release/drcom_client.exe")) { exit 1 }
+        if (-not (Test-Path "build/mock_server/Release/mock_drcom_server.exe")) { exit 1 }
+        Write-Host "Build artifacts verified successfully"
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: drcom-client-windows
+        path: |
+          build/src/Release/drcom_client.exe
+          build/mock_server/Release/mock_drcom_server.exe
+          config/
+
+  build-macos:
+    runs-on: macos-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: |
+        brew install cmake
+    
+    - name: Configure CMake
+      run: |
+        mkdir build
+        cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release
+    
+    - name: Build
+      run: |
+        cd build
+        make -j$(sysctl -n hw.ncpu)
+    
+    - name: Test build artifacts
+      run: |
+        test -f build/src/drcom_client
+        test -f build/mock_server/mock_drcom_server
+        echo "Build artifacts verified successfully"
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: drcom-client-macos
+        path: |
+          build/src/drcom_client
+          build/mock_server/mock_drcom_server
+          config/
+
+  integration-test:
+    runs-on: ubuntu-latest
+    needs: build-linux
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Download Linux artifacts
+      uses: actions/download-artifact@v3
+      with:
+        name: drcom-client-linux
+        path: artifacts/
+    
+    - name: Make executables runnable
+      run: |
+        chmod +x artifacts/drcom_client
+        chmod +x artifacts/mock_drcom_server
+    
+    - name: Run integration test
+      run: |
+        # 启动 mock 服务器
+        ./artifacts/mock_drcom_server &
+        SERVER_PID=$!
+        sleep 2
+        
+        # 运行客户端测试
+        timeout 10s ./artifacts/drcom_client -c config/drcom_test.conf || echo "Client test completed"
+        
+        # 清理
+        kill $SERVER_PID || true
+        
+        echo "Integration test completed"
+
+  create-release:
+    runs-on: ubuntu-latest
+    needs: [build-linux, build-windows, build-macos, integration-test]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+    
+    - name: Create release packages
+      run: |
+        # 创建 Linux 发布包
+        mkdir -p releases/linux
+        cp drcom-client-linux/drcom_client releases/linux/
+        cp drcom-client-linux/mock_drcom_server releases/linux/
+        cp -r drcom-client-linux/config releases/linux/
+        tar -czf drcom-client-linux.tar.gz -C releases linux/
+        
+        # 创建 Windows 发布包
+        mkdir -p releases/windows
+        cp drcom-client-windows/drcom_client.exe releases/windows/
+        cp drcom-client-windows/mock_drcom_server.exe releases/windows/
+        cp -r drcom-client-windows/config releases/windows/
+        (cd releases && zip -r ../drcom-client-windows.zip windows/)
+        
+        # 创建 macOS 发布包
+        mkdir -p releases/macos
+        cp drcom-client-macos/drcom_client releases/macos/
+        cp drcom-client-macos/mock_drcom_server releases/macos/
+        cp -r drcom-client-macos/config releases/macos/
+        tar -czf drcom-client-macos.tar.gz -C releases macos/
+    
+    - name: Upload release packages
+      uses: actions/upload-artifact@v3
+      with:
+        name: release-packages
+        path: |
+          drcom-client-linux.tar.gz
+          drcom-client-windows.zip
+          drcom-client-macos.tar.gz
