@@ -13,6 +13,7 @@
 #include <thread>
 #include <chrono>
 #include <mutex>
+#include <ctime>
 
 namespace drcom {
 
@@ -535,18 +536,20 @@ std::vector<uint8_t> DrcomClient::buildKeepAliveAuthPacket() {
     packet[0] = 0xff;
     std::copy(md5_password_.begin(), md5_password_.end(), packet.begin() + 1);
     
-    // Trailing bytes: zero padding + counter (3 bytes) + client IP (4 bytes)
-    // Counter at offset 17-19 (3 bytes, little-endian)
-    packet[17] = static_cast<uint8_t>(auth_counter_ & 0xff);
-    packet[18] = static_cast<uint8_t>((auth_counter_ >> 8) & 0xff);
-    packet[19] = static_cast<uint8_t>((auth_counter_ >> 16) & 0xff);
+    // Zero padding bytes at offset 17-19 (3 bytes, already initialized)
     
-    // Client IP at offset 20-23
-    const auto& user_config = config_.getUserConfig();
-    auto ip_bytes = parseIPAddress(user_config.ip);
-    std::copy(ip_bytes.begin(), ip_bytes.end(), packet.begin() + 20);
+    // Server DRCOM indicator (16 bytes at offset 20-35)
+    if (!std::all_of(server_drcom_indicator_.begin(), server_drcom_indicator_.end(), 
+                     [](uint8_t b) { return b == 0; })) {
+        std::copy(server_drcom_indicator_.begin(), server_drcom_indicator_.end(), 
+                  packet.begin() + 20);
+    }
     
-    // Remaining bytes 24-37 are zero-padded (already initialized)
+    // Timestamp (2 bytes at offset 36-37)
+    time_t time_now = time(NULL);
+    packet[36] = static_cast<uint8_t>(time_now % (2 << 7));
+    time_now /= (2 << 7);
+    packet[37] = static_cast<uint8_t>(time_now % (2 << 7));
     
     return packet;
 }
@@ -559,19 +562,33 @@ std::vector<uint8_t> DrcomClient::buildKeepAliveHeartbeatPacket(bool is_first, b
     packet[0] = 0x07;
     packet[1] = static_cast<uint8_t>(heartbeat_counter_ & 0xff);
     
-    // Heartbeat version (2 bytes at offset 2-3)
+    // Fixed bytes sequence: 0x28 0x00 0x0b (3 bytes at offset 2-4)
+    packet[2] = 0x28;
+    packet[3] = 0x00;
+    packet[4] = 0x0b;
+    
+    // Fixed byte: 0x01 (1 byte at offset 5)
+    packet[5] = 0x01;
+    
+    // Heartbeat version (2 bytes at offset 6-7)
     if (is_first) {
-        packet[2] = protocol_config.first_heartbeat_version[0];
-        packet[3] = protocol_config.first_heartbeat_version[1]; 
+        packet[6] = protocol_config.first_heartbeat_version[0];
+        packet[7] = protocol_config.first_heartbeat_version[1]; 
     } else if (is_extra) {
-        packet[2] = protocol_config.extra_heartbeat_version[0];
-        packet[3] = protocol_config.extra_heartbeat_version[1];
+        packet[6] = protocol_config.extra_heartbeat_version[0];
+        packet[7] = protocol_config.extra_heartbeat_version[1];
     } else {
-        packet[2] = protocol_config.keep_alive_version[0];
-        packet[3] = protocol_config.keep_alive_version[1];
+        packet[6] = protocol_config.keep_alive_version[0];
+        packet[7] = protocol_config.keep_alive_version[1];
     }
     
-    // Zero padding at offset 4-15 (already initialized)
+    // Random number (4 bytes at offset 8-11)
+    packet[8] = rand() % 0xff;
+    packet[9] = rand() % 0xff;
+    packet[10] = rand() % 0xff;
+    packet[11] = rand() % 0xff;
+    
+    // Zero padding at offset 12-15 (already initialized)
     
     // Server token (4 bytes at offset 16-19) if available
     if (!std::all_of(heartbeat_server_token_.begin(), heartbeat_server_token_.end(), 
