@@ -14,16 +14,44 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
+    - name: Cache APT packages
+      uses: actions/cache@v4
+      with:
+        path: /var/cache/apt
+        key: ${{ runner.os }}-apt-${{ hashFiles('**/apt-packages.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-apt-
+    
     - name: Install dependencies
       run: |
-        sudo apt-get update
-        sudo apt-get install -y cmake build-essential
+        # 只在缓存未命中时更新包列表
+        if [ ! -f /var/cache/apt/archives/lock ]; then
+          sudo apt-get update
+        fi
+        sudo apt-get install -y cmake build-essential ccache
+    
+    - name: Setup ccache
+      uses: hendrikmuhs/ccache-action@v1.2
+      with:
+        key: ${{ runner.os }}-ccache-${{ hashFiles('**/CMakeLists.txt') }}
+    
+    - name: Cache CMake build
+      uses: actions/cache@v4
+      with:
+        path: |
+          build
+          ~/.cmake
+        key: ${{ runner.os }}-cmake-${{ hashFiles('**/CMakeLists.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-cmake-
     
     - name: Configure CMake
       run: |
-        mkdir build
+        if [ ! -d "build" ]; then
+          mkdir build
+        fi
         cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release
+        cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache
     
     - name: Build
       run: |
@@ -53,9 +81,31 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
+    - name: Cache MSVC
+      uses: actions/cache@v4
+      with:
+        path: |
+          C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild
+          C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC
+        key: ${{ runner.os }}-msvc-${{ hashFiles('**/CMakeLists.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-msvc-
+    
+    - name: Cache CMake build
+      uses: actions/cache@v4
+      with:
+        path: |
+          build
+          ${{ env.LOCALAPPDATA }}\cmake
+        key: ${{ runner.os }}-cmake-${{ hashFiles('**/CMakeLists.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-cmake-
+    
     - name: Configure CMake
       run: |
-        mkdir build
+        if (-not (Test-Path "build")) {
+          mkdir build
+        }
         cd build
         cmake .. -G "Visual Studio 17 2022" -A x64
     
@@ -86,15 +136,44 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
+    - name: Cache Homebrew
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/Library/Caches/Homebrew
+          /usr/local/Homebrew
+        key: ${{ runner.os }}-brew-${{ hashFiles('**/Brewfile') }}
+        restore-keys: |
+          ${{ runner.os }}-brew-
+    
     - name: Install dependencies
       run: |
-        brew install --formula cmake
+        brew install --formula cmake ccache
+        # 清理 Homebrew 缓存以减少缓存大小
+        brew cleanup
+    
+    - name: Setup ccache
+      uses: hendrikmuhs/ccache-action@v1.2
+      with:
+        key: ${{ runner.os }}-ccache-${{ hashFiles('**/CMakeLists.txt') }}
+    
+    - name: Cache CMake build
+      uses: actions/cache@v4
+      with:
+        path: |
+          build
+          ~/.cmake
+        key: ${{ runner.os }}-cmake-${{ hashFiles('**/CMakeLists.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-cmake-
     
     - name: Configure CMake
       run: |
-        mkdir build
+        if [ ! -d "build" ]; then
+          mkdir build
+        fi
         cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release
+        cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache
     
     - name: Build
       run: |
