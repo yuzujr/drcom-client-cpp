@@ -26,7 +26,7 @@ mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release (-DCMAKE_INSTALL_PREFIX="安装目录")(可选)
 
 # 编译
-cmake --build . --config Release -j
+cmake --build . --config Release
 
 # 安装（可选）
 cmake --build . --target install
