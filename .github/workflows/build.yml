@@ -256,9 +256,7 @@ jobs:
       with:
         tag_name: ${{ steps.release_info.outputs.VERSION }}
         name: "DrCom Client ${{ steps.release_info.outputs.VERSION }}"
-        body: |
-          # DrCom Client Release ${{ steps.release_info.outputs.VERSION }}
-          
+        body: |         
           ## 构建信息
           - 构建时间: ${{ github.event.head_commit.timestamp }}
           - 提交: ${{ github.sha }}
