@@ -44,6 +44,7 @@ jobs:
           build/src/drcom_client
           build/mock_server/mock_drcom_server
           config/
+        retention-days: 5
 
   build-windows:
     runs-on: windows-latest
@@ -76,6 +77,7 @@ jobs:
           build/src/Release/drcom_client.exe
           build/mock_server/Release/mock_drcom_server.exe
           config/
+        retention-days: 5
 
   build-macos:
     runs-on: macos-latest
@@ -112,6 +114,7 @@ jobs:
           build/src/drcom_client
           build/mock_server/mock_drcom_server
           config/
+        retention-days: 5
 
   integration-test:
     runs-on: ubuntu-latest
@@ -126,20 +129,42 @@ jobs:
         name: drcom-client-linux
         path: artifacts/
     
+    - name: List downloaded files for debugging
+      run: |
+        echo "Contents of artifacts directory:"
+        find artifacts/ -type f -ls
+        echo "Current directory contents:"
+        ls -la
+    
     - name: Make executables runnable
       run: |
-        chmod +x artifacts/drcom_client
-        chmod +x artifacts/mock_drcom_server
+        # 查找实际的可执行文件位置
+        DRCOM_CLIENT=$(find artifacts/ -name "drcom_client" -type f)
+        MOCK_SERVER=$(find artifacts/ -name "mock_drcom_server" -type f)
+        
+        if [ -z "$DRCOM_CLIENT" ] || [ -z "$MOCK_SERVER" ]; then
+          echo "ERROR: Could not find required executables"
+          echo "Looking for drcom_client: $DRCOM_CLIENT"
+          echo "Looking for mock_drcom_server: $MOCK_SERVER"
+          exit 1
+        fi
+        
+        chmod +x "$DRCOM_CLIENT"
+        chmod +x "$MOCK_SERVER"
+        
+        # 为后续步骤导出路径
+        echo "DRCOM_CLIENT=$DRCOM_CLIENT" >> $GITHUB_ENV
+        echo "MOCK_SERVER=$MOCK_SERVER" >> $GITHUB_ENV
     
     - name: Run integration test
       run: |
         # 启动 mock 服务器
-        ./artifacts/mock_drcom_server &
+        "$MOCK_SERVER" &
         SERVER_PID=$!
         sleep 2
         
         # 运行客户端测试
-        timeout 10s ./artifacts/drcom_client -c config/drcom_test.conf || echo "Client test completed"
+        timeout 10s "$DRCOM_CLIENT" -c config/drcom_test.conf || echo "Client test completed"
         
         # 清理
         kill $SERVER_PID || true
@@ -157,28 +182,51 @@ jobs:
     - name: Download all artifacts
       uses: actions/download-artifact@v4
     
+    - name: Debug artifact structure
+      run: |
+        echo "=== Artifact structure ==="
+        find . -name "drcom-client-*" -type d | while read dir; do
+          echo "Directory: $dir"
+          find "$dir" -type f -ls
+        done
+    
     - name: Create release packages
       run: |
         # 创建 Linux 发布包
         mkdir -p releases/linux
-        cp drcom-client-linux/drcom_client releases/linux/
-        cp drcom-client-linux/mock_drcom_server releases/linux/
-        cp -r drcom-client-linux/config releases/linux/
+        find drcom-client-linux/ -name "drcom_client" -type f -exec cp {} releases/linux/ \;
+        find drcom-client-linux/ -name "mock_drcom_server" -type f -exec cp {} releases/linux/ \;
+        if [ -d "drcom-client-linux/config" ]; then
+          cp -r drcom-client-linux/config releases/linux/
+        fi
         tar -czf drcom-client-linux.tar.gz -C releases linux/
         
         # 创建 Windows 发布包
         mkdir -p releases/windows
-        cp drcom-client-windows/drcom_client.exe releases/windows/
-        cp drcom-client-windows/mock_drcom_server.exe releases/windows/
-        cp -r drcom-client-windows/config releases/windows/
+        find drcom-client-windows/ -name "drcom_client.exe" -type f -exec cp {} releases/windows/ \;
+        find drcom-client-windows/ -name "mock_drcom_server.exe" -type f -exec cp {} releases/windows/ \;
+        if [ -d "drcom-client-windows/config" ]; then
+          cp -r drcom-client-windows/config releases/windows/
+        fi
         (cd releases && zip -r ../drcom-client-windows.zip windows/)
         
         # 创建 macOS 发布包
         mkdir -p releases/macos
-        cp drcom-client-macos/drcom_client releases/macos/
-        cp drcom-client-macos/mock_drcom_server releases/macos/
-        cp -r drcom-client-macos/config releases/macos/
+        find drcom-client-macos/ -name "drcom_client" -type f -exec cp {} releases/macos/ \;
+        find drcom-client-macos/ -name "mock_drcom_server" -type f -exec cp {} releases/macos/ \;
+        if [ -d "drcom-client-macos/config" ]; then
+          cp -r drcom-client-macos/config releases/macos/
+        fi
         tar -czf drcom-client-macos.tar.gz -C releases macos/
+        
+        # 验证发布包
+        echo "=== Release packages created ==="
+        ls -la *.tar.gz *.zip
+        
+        echo "=== Contents verification ==="
+        tar -tzf drcom-client-linux.tar.gz | head -10
+        tar -tzf drcom-client-macos.tar.gz | head -10
+        unzip -l drcom-client-windows.zip | head -10
     
     - name: Upload release packages
       uses: actions/upload-artifact@v4
