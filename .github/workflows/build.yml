@@ -14,42 +14,19 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
-    - name: Cache APT packages
-      uses: actions/cache@v4
-      with:
-        path: /var/cache/apt
-        key: ${{ runner.os }}-apt-${{ hashFiles('**/apt-packages.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-apt-
-    
     - name: Install dependencies
       run: |
-        # 只在缓存未命中时更新包列表
-        if [ ! -f /var/cache/apt/archives/lock ]; then
-          sudo apt-get update
-        fi
+        sudo apt-get update
         sudo apt-get install -y cmake build-essential ccache
     
     - name: Setup ccache
       uses: hendrikmuhs/ccache-action@v1.2
       with:
-        key: ${{ runner.os }}-ccache-${{ hashFiles('**/CMakeLists.txt') }}
-    
-    - name: Cache CMake build
-      uses: actions/cache@v4
-      with:
-        path: |
-          build
-          ~/.cmake
-        key: ${{ runner.os }}-cmake-${{ hashFiles('**/CMakeLists.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-cmake-
+        key: ${{ runner.os }}-ccache-${{ hashFiles('**/CMakeLists.txt', '**/*.cpp', '**/*.h') }}
     
     - name: Configure CMake
       run: |
-        if [ ! -d "build" ]; then
-          mkdir build
-        fi
+        mkdir build
         cd build
         cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache
     
@@ -81,31 +58,9 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
-    - name: Cache MSVC
-      uses: actions/cache@v4
-      with:
-        path: |
-          C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild
-          C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC
-        key: ${{ runner.os }}-msvc-${{ hashFiles('**/CMakeLists.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-msvc-
-    
-    - name: Cache CMake build
-      uses: actions/cache@v4
-      with:
-        path: |
-          build
-          ${{ env.LOCALAPPDATA }}\cmake
-        key: ${{ runner.os }}-cmake-${{ hashFiles('**/CMakeLists.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-cmake-
-    
     - name: Configure CMake
       run: |
-        if (-not (Test-Path "build")) {
-          mkdir build
-        }
+        mkdir build
         cd build
         cmake .. -G "Visual Studio 17 2022" -A x64
     
@@ -136,42 +91,18 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
-    - name: Cache Homebrew
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/Library/Caches/Homebrew
-          /usr/local/Homebrew
-        key: ${{ runner.os }}-brew-${{ hashFiles('**/Brewfile') }}
-        restore-keys: |
-          ${{ runner.os }}-brew-
-    
     - name: Install dependencies
       run: |
         brew install --formula cmake ccache
-        # 清理 Homebrew 缓存以减少缓存大小
-        brew cleanup
     
     - name: Setup ccache
       uses: hendrikmuhs/ccache-action@v1.2
       with:
-        key: ${{ runner.os }}-ccache-${{ hashFiles('**/CMakeLists.txt') }}
-    
-    - name: Cache CMake build
-      uses: actions/cache@v4
-      with:
-        path: |
-          build
-          ~/.cmake
-        key: ${{ runner.os }}-cmake-${{ hashFiles('**/CMakeLists.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-cmake-
+        key: ${{ runner.os }}-ccache-${{ hashFiles('**/CMakeLists.txt', '**/*.cpp', '**/*.h') }}
     
     - name: Configure CMake
       run: |
-        if [ ! -d "build" ]; then
-          mkdir build
-        fi
+        mkdir build
         cd build
         cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache
     
@@ -262,14 +193,6 @@ jobs:
     - name: Download all artifacts
       uses: actions/download-artifact@v4
     
-    - name: Debug artifact structure
-      run: |
-        echo "=== Artifact structure ==="
-        find . -name "drcom-client-*" -type d | while read dir; do
-          echo "Directory: $dir"
-          find "$dir" -type f -ls
-        done
-    
     - name: Create release packages
       run: |
         # 创建 Linux 发布包
@@ -337,23 +260,6 @@ jobs:
           - 构建时间: ${{ github.event.head_commit.timestamp }}
           - 提交: ${{ github.sha }}
           - 分支: ${{ github.ref_name }}
-          
-          ## 支持的平台
-          - ✅ Linux (x86_64)
-          - ✅ Windows (x86_64)
-          - ✅ macOS (x86_64/arm64)
-          
-          ## 下载说明
-          - **Linux**: 下载 `drcom-client-linux.tar.gz`
-          - **Windows**: 下载 `drcom-client-windows.zip`
-          - **macOS**: 下载 `drcom-client-macos.tar.gz`
-          
-          ## 使用方法
-          1. 解压下载的文件
-          2. 复制 `config/drcom_jlu.conf` 到合适的位置并修改配置
-          3. 运行 `./drcom_client -c <配置文件路径>`
-          
-          更多信息请参考 [README.md](https://github.com/yuzujr/drcom-client-cpp/blob/main/README.md)
         files: |
           drcom-client-linux.tar.gz
           drcom-client-windows.zip
