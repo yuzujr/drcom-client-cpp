@@ -96,7 +96,19 @@ jobs:
     
     - name: Install dependencies
       run: |
-        brew install --formula cmake ccache
+        brew update
+        if brew list --formula | grep -q '^cmake$'; then
+          echo "cmake already installed:"
+          cmake --version
+        else
+          brew install cmake
+        fi
+        if brew list --formula | grep -q '^ccache$'; then
+          echo "ccache already installed:"
+          ccache --version
+        else
+          brew install ccache
+        fi
     
     - name: Setup ccache
       uses: hendrikmuhs/ccache-action@v1.2
