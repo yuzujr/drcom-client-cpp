@@ -14,14 +14,8 @@
 std::atomic<bool> g_shutdown_requested{false};
 std::unique_ptr<drcom::DrcomClient> g_client;
 
-void signalHandler(int signal) {
-    std::cout << "\nReceived signal " << signal
-              << ", shutting down gracefully..." << std::endl;
-    g_shutdown_requested = true;
-
-    if (g_client && g_client->isConnected()) {
-        g_client->disconnect();
-    }
+void signalHandler(int) {
+    g_shutdown_requested.store(true, std::memory_order_relaxed);
 }
 
 void printUsage(const char* program_name) {
@@ -136,7 +130,7 @@ int main(int argc, char* argv[]) {
 
         // Main loop
         while (!g_shutdown_requested && g_client->isConnected()) {
-            std::this_thread::sleep_for(std::chrono::seconds(1));
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
             // Print statistics every 30 seconds
             static int counter = 0;

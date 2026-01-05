@@ -16,6 +16,10 @@
 #include <ctime>
 
 namespace drcom {
+namespace {
+constexpr int kKeepaliveTimeoutMs = 500;
+constexpr int kDisconnectTimeoutMs = 500;
+}  // namespace
 
 // ================= Helper Functions =================
 const char* clientStateToString(ClientState state) {
@@ -135,11 +139,11 @@ bool DrcomClient::disconnect() {
         stopAllThreads();
         
         // Perform logout sequence
-        if (!performChallenge(false)) {
+        if (!performChallenge(false, kDisconnectTimeoutMs)) {
             logger_.warn("Logout challenge failed");
         }
         
-        if (!performLogout()) {
+        if (!performLogout(kDisconnectTimeoutMs)) {
             logger_.warn("Logout failed");
         }
         
@@ -180,13 +184,13 @@ void DrcomClient::notifyEvent(ClientEvent event, const std::string& message) {
 }
 
 // Simplified protocol implementation (placeholder)
-bool DrcomClient::performChallenge(bool is_login) {
+bool DrcomClient::performChallenge(bool is_login, int timeout_ms) {
     logger_.debug("Performing challenge (login={})", is_login);
     
     auto challenge_packet = buildChallengePacket(is_login);
     std::vector<uint8_t> response;
     
-    if (!sendAndReceive(challenge_packet, response)) {
+    if (!sendAndReceive(challenge_packet, response, timeout_ms)) {
         return false;
     }
     
@@ -206,13 +210,13 @@ bool DrcomClient::performLogin() {
     return handleLoginResponse(response);
 }
 
-bool DrcomClient::performLogout() {
+bool DrcomClient::performLogout(int timeout_ms) {
     logger_.debug("Performing logout");
     
     auto logout_packet = buildLogoutPacket();
     std::vector<uint8_t> response;
     
-    if (!sendAndReceive(logout_packet, response)) {
+    if (!sendAndReceive(logout_packet, response, timeout_ms)) {
         return false;
     }
     
@@ -313,7 +317,7 @@ bool DrcomClient::sendKeepAliveAuth() {
     auto packet = buildKeepAliveAuthPacket();
     std::vector<uint8_t> response;
     
-    if (!sendAndReceive(packet, response)) {
+    if (!sendAndReceive(packet, response, kKeepaliveTimeoutMs)) {
         logger_.error("Failed to send keep-alive auth");
         return false;
     }
@@ -336,7 +340,7 @@ bool DrcomClient::sendKeepAliveHeartbeat() {
     auto packet = buildKeepAliveHeartbeatPacket(is_first, is_extra);
     std::vector<uint8_t> response;
     
-    if (!sendAndReceive(packet, response)) {
+    if (!sendAndReceive(packet, response, kKeepaliveTimeoutMs)) {
         logger_.error("Failed to send keep-alive heartbeat");
         return false;
     }
@@ -361,7 +365,7 @@ bool DrcomClient::sendExtraHeartbeat() {
     auto packet = buildKeepAliveHeartbeatPacket(false, true);
     std::vector<uint8_t> response;
     
-    if (!sendAndReceive(packet, response)) {
+    if (!sendAndReceive(packet, response, kKeepaliveTimeoutMs)) {
         logger_.error("Failed to send extra heartbeat");
         return false;
     }
@@ -668,7 +672,8 @@ bool DrcomClient::sendAndReceive(const std::vector<uint8_t>& send_data,
     // Set timeout
     auto timeout_error = socket_->setTimeout(timeout_ms);
     if (timeout_error) {
-        logger_.warn("Failed to set socket timeout: {}", timeout_error.message());
+        logger_.error("Failed to set socket timeout: {}", timeout_error.message());
+        return false;
     }
     
     // Send data

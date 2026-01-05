@@ -192,9 +192,9 @@ private:
     void notifyEvent(ClientEvent event, const std::string& message = "");
     
     // Protocol implementation
-    bool performChallenge(bool is_login = true);
+    bool performChallenge(bool is_login = true, int timeout_ms = 15000);
     bool performLogin();
-    bool performLogout();
+    bool performLogout(int timeout_ms = 15000);
     
     // Keep-alive mechanisms
     void keepaliveAuthWorker();
