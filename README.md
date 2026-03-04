@@ -9,6 +9,30 @@
 - make -> cmake
 - 增加模拟服务器用于测试
 
+## 安装
+
+### NixOS
+
+在 `flake.nix` 中添加：
+
+```nix
+inputs.drcom-client-cpp.url = "github:yuzujr/drcom-client-cpp";
+```
+
+在 NixOS 配置中：
+
+```nix
+environment.systemPackages = [
+  inputs.drcom-client-cpp.packages.${pkgs.system}.default
+];
+```
+
+不安装直接运行：
+
+```bash
+nix run github:yuzujr/drcom-client-cpp -- /path/to/drcom.conf
+```
+
 ## 构建步骤
 
 ### 系统要求
