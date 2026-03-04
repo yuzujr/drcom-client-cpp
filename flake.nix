@@ -17,9 +17,6 @@
 
         nativeBuildInputs = [ pkgs.cmake ];
 
-        # No external library deps — the project implements MD5 itself and
-        # uses only POSIX sockets.
-
         installPhase = ''
           runHook preInstall
           install -Dm755 src/drcom_client $out/bin/drcom_client
