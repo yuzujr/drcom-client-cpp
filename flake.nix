@@ -3,17 +3,19 @@
 
   inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
 
-  outputs = { self, nixpkgs }:
+  outputs =
+    { self, nixpkgs }:
     let
       system = "x86_64-linux";
-      pkgs   = nixpkgs.legacyPackages.${system};
-    in {
+      pkgs = nixpkgs.legacyPackages.${system};
+    in
+    {
 
       # ── Package ────────────────────────────────────────────────────────────
       packages.${system}.default = pkgs.stdenv.mkDerivation {
-        pname   = "drcom-client-cpp";
+        pname = "drcom-client-cpp";
         version = "0.1.0";
-        src     = ./.;
+        src = ./.;
 
         nativeBuildInputs = [ pkgs.cmake ];
 
@@ -27,20 +29,18 @@
 
         meta = {
           description = "DRCOM 802.1X client for JLU";
-          homepage    = "https://github.com/yuzujr/drcom-client-cpp";
-          license     = pkgs.lib.licenses.mit;
-          platforms   = pkgs.lib.platforms.linux;
+          homepage = "https://github.com/yuzujr/drcom-client-cpp";
+          license = pkgs.lib.licenses.mit;
+          platforms = pkgs.lib.platforms.linux;
         };
       };
 
       # ── Dev shell ──────────────────────────────────────────────────────────
-      devShells.${system}.default = pkgs.mkShell {
+      devShells.${system}.default = pkgs.mkShell.override { stdenv = pkgs.clangStdenv; } {
         packages = with pkgs; [
           cmake
           ninja
-          clang
-          bear          # generate compile_commands.json
-          gdb
+          clang-tools
         ];
 
         shellHook = ''

@@ -1,6 +1,8 @@
 .cache/
 .vscode/
+.direnv/
 build/
 build-release/
+.envrc
 compile_commands.json
 drcom.log
