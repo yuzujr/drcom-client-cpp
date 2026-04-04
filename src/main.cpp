@@ -55,6 +55,12 @@ void printUsage(const char* program_name) {
               << std::endl;
 }
 
+int printArgumentError(const char* program_name, std::string_view message) {
+    std::cerr << message << std::endl;
+    printUsage(program_name);
+    return 1;
+}
+
 void printVersion() {
     std::cout << "v" << DRCOM_CLIENT_VERSION << std::endl;
 }
@@ -250,12 +256,26 @@ int main(int argc, char* argv[]) {
         } else if (arg == "-v" || arg == "--version") {
             printVersion();
             return 0;
-        } else if ((arg == "-c" || arg == "--config") && i + 1 < argc) {
+        } else if (arg == "-c" || arg == "--config") {
+            if (i + 1 >= argc) {
+                return printArgumentError(argv[0],
+                                          "Missing value for option: " + arg);
+            }
             config_file = argv[++i];
+        } else if (arg.rfind("--config=", 0) == 0) {
+            config_file = arg.substr(std::string("--config=").size());
+            if (config_file.empty()) {
+                return printArgumentError(
+                    argv[0], "Missing value for option: --config");
+            }
+        } else if (arg.rfind("-c=", 0) == 0) {
+            config_file = arg.substr(std::string("-c=").size());
+            if (config_file.empty()) {
+                return printArgumentError(argv[0],
+                                          "Missing value for option: -c");
+            }
         } else {
-            std::cerr << "Unknown argument: " << arg << std::endl;
-            printUsage(argv[0]);
-            return 1;
+            return printArgumentError(argv[0], "Unknown argument: " + arg);
         }
     }
 
