@@ -6,6 +6,10 @@ else()
 add_executable(drcom_client ${SOURCE_FILES})
 endif()
 
+target_compile_definitions(drcom_client PRIVATE
+    DRCOM_CLIENT_VERSION="${PROJECT_VERSION}"
+)
+
 target_include_directories(drcom_client PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )

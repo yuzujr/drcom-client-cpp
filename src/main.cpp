@@ -10,11 +10,21 @@
 #include "drcom/drcom.h"
 
 #ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <shellapi.h>  // CommandLineToArgvW
 #include <windows.h>
 #endif
 
 namespace {
+
+#ifndef DRCOM_CLIENT_VERSION
+#define DRCOM_CLIENT_VERSION "0.0.0-dev"
+#endif
 
 constexpr auto kLoopPollInterval = std::chrono::milliseconds(100);
 constexpr auto kStatisticsInterval = std::chrono::seconds(30);
@@ -46,10 +56,7 @@ void printUsage(const char* program_name) {
 }
 
 void printVersion() {
-    std::cout << "JLU DRCOM Client (C++) v2.0.0\n"
-              << "Cross-platform implementation in modern C++\n"
-              << "Based on original C implementation\n"
-              << std::endl;
+    std::cout << "v" << DRCOM_CLIENT_VERSION << std::endl;
 }
 
 void logConfiguration(drcom::Logger& logger, const drcom::Config& config) {
@@ -76,7 +83,7 @@ bool waitInterruptibly(std::chrono::milliseconds delay) {
     auto remaining = delay;
     while (!shutdownRequested() &&
            remaining > std::chrono::milliseconds::zero()) {
-        const auto sleep_duration = std::min(remaining, kLoopPollInterval);
+        const auto sleep_duration = (std::min)(remaining, kLoopPollInterval);
         std::this_thread::sleep_for(sleep_duration);
         remaining -= sleep_duration;
     }

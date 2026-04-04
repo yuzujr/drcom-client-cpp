@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(drcom-client-cpp)
+project(drcom-client-cpp VERSION 1.3.0)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Set C++ standard
