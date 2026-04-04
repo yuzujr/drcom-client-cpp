@@ -906,7 +906,7 @@ bool DrcomClient::handleKeepAliveAuthResponse(const std::vector<uint8_t>& data,
         return false;
     }
 
-    if (data[0] != 0xff) {
+    if (data[0] != 0xff && data[0] != 0x07) {
         if (error_message) {
             *error_message = std::format("Unexpected keep-alive auth response type: 0x{:02x}",
                                          data[0]);
@@ -917,15 +917,8 @@ bool DrcomClient::handleKeepAliveAuthResponse(const std::vector<uint8_t>& data,
         return false;
     }
 
-    if (data[1] != 0x00) {
-        if (error_message) {
-            *error_message = std::format("Keep-alive auth rejected with status 0x{:02x}",
-                                         data[1]);
-        }
-        if (disconnect_reason) {
-            *disconnect_reason = DisconnectReason::SERVER_DISCONNECT;
-        }
-        return false;
+    if (data.size() >= 20) {
+        std::copy(data.begin() + 16, data.begin() + 20, heartbeat_server_token_.begin());
     }
 
     std::lock_guard<std::mutex> lock(stats_mutex_);
@@ -951,16 +944,6 @@ bool DrcomClient::handleKeepAliveHeartbeatResponse(const std::vector<uint8_t>& d
     if (data[0] != 0x07) {
         if (error_message) {
             *error_message = std::format("Unexpected heartbeat response type: 0x{:02x}", data[0]);
-        }
-        if (disconnect_reason) {
-            *disconnect_reason = DisconnectReason::SERVER_DISCONNECT;
-        }
-        return false;
-    }
-
-    if (data[1] != 0x00) {
-        if (error_message) {
-            *error_message = std::format("Heartbeat rejected with status 0x{:02x}", data[1]);
         }
         if (disconnect_reason) {
             *disconnect_reason = DisconnectReason::SERVER_DISCONNECT;

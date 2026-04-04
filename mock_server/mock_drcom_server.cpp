@@ -274,20 +274,17 @@ private:
             return;
         }
         
-        // 构建Keep-alive auth响应
-        std::vector<uint8_t> response;
-        response.push_back(0xff); // Keep-alive auth response type
-        response.push_back(0x00); // Success code
-        
-        // 复制原始数据的部分内容作为响应
+        // Real servers may answer the auth keep-alive with a 0x07 packet.
+        std::vector<uint8_t> response(20, 0x00);
+        response[0] = 0x07;
+        response[1] = 0x00;
+
         if (len > 2) {
-            response.insert(response.end(), data + 2, data + std::min(len, size_t(16)));
+            const size_t copy_end = std::min(len, size_t(16));
+            std::copy(data + 2, data + copy_end, response.begin() + 2);
         }
-        
-        // 填充到标准长度
-        while (response.size() < 16) {
-            response.push_back(0x00);
-        }
+
+        std::copy(server_token_.begin(), server_token_.end(), response.begin() + 16);
         
         sendResponse(response);
     }
@@ -303,7 +300,7 @@ private:
         // 构建Keep-alive heartbeat响应
         std::vector<uint8_t> response;
         response.push_back(0x07); // Keep-alive heartbeat response type
-        response.push_back(0x00); // Success code
+        response.push_back(len > 1 ? data[1] : 0x00);
         
         // 复制原始数据的部分内容作为响应
         if (len > 2) {
@@ -314,6 +311,8 @@ private:
         while (response.size() < 40) {
             response.push_back(0x00);
         }
+
+        std::copy(server_token_.begin(), server_token_.end(), response.begin() + 16);
         
         sendResponse(response);
     }
