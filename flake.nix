@@ -8,13 +8,14 @@
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
+      version = pkgs.lib.strings.removeSuffix "\n" (builtins.readFile ./VERSION);
     in
     {
 
       # ── Package ────────────────────────────────────────────────────────────
       packages.${system}.default = pkgs.stdenv.mkDerivation {
         pname = "drcom-client-cpp";
-        version = "0.1.0";
+        inherit version;
         src = ./.;
 
         nativeBuildInputs = [ pkgs.cmake ];
