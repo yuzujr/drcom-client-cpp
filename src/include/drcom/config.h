@@ -25,8 +25,8 @@ public:
         std::array<uint8_t, 6> mac;
         std::string hostname;
         std::string os_info;
-        std::string primary_dns;
-        std::string dhcp_server;
+        std::string primary_dns{"0.0.0.0"};
+        std::string dhcp_server{"0.0.0.0"};
     };
     
     // Server configuration
@@ -37,9 +37,11 @@ public:
     
     // Client configuration  
     struct ClientConfig {
-        std::string ip;  // bind to any interface
+        std::string ip{"0.0.0.0"};
         uint16_t port;
-        bool debug_enabled;
+        bool debug_enabled{false};
+        bool auto_reconnect{true};
+        uint32_t reconnect_interval{3};
     };
     
     // Protocol configuration

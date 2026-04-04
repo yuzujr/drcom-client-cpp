@@ -5,6 +5,29 @@
 #include <regex>
 #include <iomanip>
 #include <algorithm>
+#include <cctype>
+
+namespace {
+
+std::string trimCopy(std::string value) {
+    const auto begin = value.find_first_not_of(" \t\r\n");
+    if (begin == std::string::npos) {
+        return {};
+    }
+
+    const auto end = value.find_last_not_of(" \t\r\n");
+    return value.substr(begin, end - begin + 1);
+}
+
+bool parseBoolean(const std::string& value) {
+    std::string normalized = trimCopy(value);
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return normalized == "true" || normalized == "1" || normalized == "yes" ||
+           normalized == "on";
+}
+
+}  // namespace
 
 namespace drcom {
 
@@ -36,10 +59,11 @@ bool Config::loadFromFile(const std::string& filename) {
         std::string value = line.substr(eq_pos + 1);
         
         // Trim whitespace
-        key.erase(0, key.find_first_not_of(" \t"));
-        key.erase(key.find_last_not_of(" \t") + 1);
-        value.erase(0, value.find_first_not_of(" \t"));
-        value.erase(value.find_last_not_of(" \t") + 1);
+        key = trimCopy(key);
+        value = trimCopy(value);
+        if (key.empty()) {
+            continue;
+        }
         
         // Remove quotes if present
         if (value.length() >= 2 && value.front() == '"' && value.back() == '"') {
@@ -65,6 +89,8 @@ bool Config::loadFromFile(const std::string& filename) {
             } catch (...) {
                 // Ignore invalid port values
             }
+        } else if (key == "client_ip") {
+            client_config_.ip = value;
         } else if (key == "client_port") {
             try {
                 client_config_.port = static_cast<uint16_t>(std::stoul(value));
@@ -72,7 +98,15 @@ bool Config::loadFromFile(const std::string& filename) {
                 // Ignore invalid port values
             }
         } else if (key == "debug") {
-            client_config_.debug_enabled = (value == "true" || value == "1" || value == "yes");
+            client_config_.debug_enabled = parseBoolean(value);
+        } else if (key == "auto_reconnect") {
+            client_config_.auto_reconnect = parseBoolean(value);
+        } else if (key == "reconnect_interval") {
+            try {
+                client_config_.reconnect_interval = static_cast<uint32_t>(std::stoul(value));
+            } catch (...) {
+                // Ignore invalid values, keep default
+            }
         } else if (key == "auth_interval") {
             try {
                 protocol_config_.auth_interval = static_cast<uint32_t>(std::stoul(value));
@@ -88,6 +122,10 @@ bool Config::loadFromFile(const std::string& filename) {
         } else if (key == "mac") {
             // Parse MAC address in format "00:11:22:33:44:55" or "00-11-22-33-44-55"
             parseMacAddress(value, user_config_.mac);
+        } else if (key == "primary_dns") {
+            user_config_.primary_dns = value;
+        } else if (key == "dhcp_server") {
+            user_config_.dhcp_server = value;
         }
     }
     
@@ -109,6 +147,8 @@ bool Config::saveToFile(const std::string& filename) const {
     file << "ip=" << user_config_.ip << "\n";
     file << "hostname=" << user_config_.hostname << "\n";
     file << "os_info=" << user_config_.os_info << "\n";
+    file << "primary_dns=" << user_config_.primary_dns << "\n";
+    file << "dhcp_server=" << user_config_.dhcp_server << "\n";
     
     // Format MAC address
     file << "mac=";
@@ -124,8 +164,13 @@ bool Config::saveToFile(const std::string& filename) const {
     file << "server_port=" << server_config_.port << "\n\n";
     
     file << "[Client]\n";
+    file << "client_ip=" << client_config_.ip << "\n";
     file << "client_port=" << client_config_.port << "\n";
     file << "debug=" << (client_config_.debug_enabled ? "true" : "false") << "\n";
+    file << "auto_reconnect=" << (client_config_.auto_reconnect ? "true" : "false") << "\n";
+    file << "reconnect_interval=" << client_config_.reconnect_interval << "\n";
+    file << "auth_interval=" << protocol_config_.auth_interval << "\n";
+    file << "heartbeat_interval=" << protocol_config_.heartbeat_interval << "\n";
     
     return true;
 }
@@ -149,9 +194,29 @@ bool Config::validate() const {
     if (!isValidIPAddress(server_config_.ip)) {
         return false;
     }
+
+    if (!client_config_.ip.empty() && !isValidIPAddress(client_config_.ip)) {
+        return false;
+    }
+
+    if (!user_config_.primary_dns.empty() && !isValidIPAddress(user_config_.primary_dns)) {
+        return false;
+    }
+
+    if (!user_config_.dhcp_server.empty() && !isValidIPAddress(user_config_.dhcp_server)) {
+        return false;
+    }
     
     // Validate ports
     if (server_config_.port == 0 || client_config_.port == 0) {
+        return false;
+    }
+
+    if (client_config_.reconnect_interval == 0) {
+        return false;
+    }
+
+    if (protocol_config_.auth_interval == 0 || protocol_config_.heartbeat_interval == 0) {
         return false;
     }
     

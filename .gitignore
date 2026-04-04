@@ -4,5 +4,6 @@
 build/
 build-release/
 .envrc
+.codex
 compile_commands.json
 drcom.log

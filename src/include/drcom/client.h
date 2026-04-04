@@ -12,7 +12,6 @@
 #include <array>
 #include <string>
 #include <mutex>
-#include <list>
 
 namespace drcom {
 
@@ -55,6 +54,17 @@ enum class ClientEvent {
     NETWORK_ERROR,
     SERVER_DISCONNECT
 };
+
+enum class DisconnectReason {
+    NONE,
+    NETWORK_ERROR,
+    AUTH_FAILURE,
+    KEEPALIVE_FAILURE,
+    SERVER_DISCONNECT,
+    PROTOCOL_ERROR
+};
+
+const char* disconnectReasonToString(DisconnectReason reason);
 
 /**
  * @brief Client event callback type
@@ -104,6 +114,9 @@ public:
      * @brief Get current client state
      */
     ClientState getState() const { return state_.load(); }
+    DisconnectReason getLastDisconnectReason() const;
+    std::string getLastDisconnectMessage() const;
+    bool shouldReconnect() const;
     
     /**
      * @brief Check if client is connected and authenticated
@@ -130,7 +143,7 @@ public:
         std::chrono::system_clock::time_point connected_since;
     };
     
-    const Statistics& getStatistics() const { return stats_; }
+    Statistics getStatistics() const;
     
     /**
      * @brief Force keepalive packet transmission
@@ -147,6 +160,10 @@ private:
     std::atomic<ClientState> state_{ClientState::DISCONNECTED};
     ClientEventCallback event_callback_;
     Statistics stats_;
+    mutable std::mutex stats_mutex_;
+    DisconnectReason last_disconnect_reason_{DisconnectReason::NONE};
+    std::string last_disconnect_message_;
+    mutable std::mutex disconnect_status_mutex_;
     
     // Protocol state
     std::array<uint8_t, 4> login_salt_{{0}};
@@ -158,48 +175,30 @@ private:
     uint64_t auth_counter_{0};
     
     // Threading
-    std::thread keepalive_auth_thread_;
-    std::thread keepalive_heartbeat_thread_;
-    std::thread resend_monitor_thread_;
+    std::thread keepalive_thread_;
     std::atomic<bool> stop_threads_{false};
     std::condition_variable stop_cv_;
     std::mutex stop_mutex_;
-    
-    // Packet tracking for resend mechanism
-    struct PacketTracker {
-        std::vector<uint8_t> data;
-        std::chrono::steady_clock::time_point timestamp;
-        int retry_count{0};
-    };
-    
-    std::list<PacketTracker> pending_packets_;
-    std::mutex packet_tracker_mutex_;
-    
-    // Legacy packet trackers (for statistics)
-    struct LegacyPacketTracker {
-        std::vector<uint8_t> data;
-        std::chrono::steady_clock::time_point send_time;
-        uint64_t send_count{0};
-        uint64_t receive_count{0};
-        std::mutex mutex;
-    };
-    
-    LegacyPacketTracker auth_tracker_;
-    LegacyPacketTracker heartbeat_tracker_;
+    std::mutex socket_io_mutex_;
     
     // Internal methods
     void setState(ClientState new_state);
     void notifyEvent(ClientEvent event, const std::string& message = "");
+    void clearDisconnectStatus();
+    void setDisconnectStatus(DisconnectReason reason, std::string message);
     
     // Protocol implementation
-    bool performChallenge(bool is_login = true, int timeout_ms = 15000);
-    bool performLogin();
-    bool performLogout(int timeout_ms = 15000);
+    bool performChallenge(bool is_login = true, int timeout_ms = 15000,
+                          std::string* error_message = nullptr,
+                          DisconnectReason* disconnect_reason = nullptr);
+    bool performLogin(std::string* error_message = nullptr,
+                      DisconnectReason* disconnect_reason = nullptr);
+    bool performLogout(int timeout_ms = 15000,
+                       std::string* error_message = nullptr,
+                       DisconnectReason* disconnect_reason = nullptr);
     
     // Keep-alive mechanisms
-    void keepaliveAuthWorker();
-    void keepaliveHeartbeatWorker();
-    void resendMonitorWorker();
+    void keepaliveWorker();
     
     bool sendKeepAliveAuth();
     bool sendKeepAliveHeartbeat();
@@ -213,21 +212,32 @@ private:
     std::vector<uint8_t> buildKeepAliveHeartbeatPacket(bool is_first = false, bool is_extra = false);
     
     // Packet handlers
-    bool handleChallengeResponse(const std::vector<uint8_t>& data, bool is_login = true);
-    bool handleLoginResponse(const std::vector<uint8_t>& data);
-    bool handleLogoutResponse(const std::vector<uint8_t>& data);
-    bool handleKeepAliveAuthResponse(const std::vector<uint8_t>& data);
-    bool handleKeepAliveHeartbeatResponse(const std::vector<uint8_t>& data);
+    bool handleChallengeResponse(const std::vector<uint8_t>& data, bool is_login = true,
+                                 std::string* error_message = nullptr,
+                                 DisconnectReason* disconnect_reason = nullptr);
+    bool handleLoginResponse(const std::vector<uint8_t>& data,
+                             std::string* error_message = nullptr,
+                             DisconnectReason* disconnect_reason = nullptr);
+    bool handleLogoutResponse(const std::vector<uint8_t>& data,
+                              std::string* error_message = nullptr,
+                              DisconnectReason* disconnect_reason = nullptr);
+    bool handleKeepAliveAuthResponse(const std::vector<uint8_t>& data,
+                                     std::string* error_message = nullptr,
+                                     DisconnectReason* disconnect_reason = nullptr);
+    bool handleKeepAliveHeartbeatResponse(const std::vector<uint8_t>& data,
+                                          std::string* error_message = nullptr,
+                                          DisconnectReason* disconnect_reason = nullptr);
     
     // Utility methods
     void stopAllThreads();
-    void startKeepaliveThreads();
+    void startKeepaliveThread();
     bool sendAndReceive(const std::vector<uint8_t>& send_data, 
                        std::vector<uint8_t>& receive_data, 
-                       int timeout_ms = 15000);
+                       int timeout_ms = 15000,
+                       std::string* error_message = nullptr);
     
-    // Interruptible sleep for threads
-    bool interruptibleSleep(std::chrono::seconds duration);
+    // Interruptible wait for the keepalive worker
+    bool interruptibleWaitUntil(std::chrono::steady_clock::time_point deadline);
 
     // IP address parsing
     std::array<uint8_t, 4> parseIPAddress(const std::string& ip);

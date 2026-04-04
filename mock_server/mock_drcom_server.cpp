@@ -52,13 +52,17 @@ private:
     std::vector<uint8_t> challenge_salt_;
     std::vector<uint8_t> server_token_;
     bool client_authenticated_;
+    uint8_t login_status_code_;
     
 #ifdef _WIN32
     WinsockInitializer winsock_init_;
 #endif
     
 public:
-    MockDrcomServer(int port = 61441) : running_(false), client_authenticated_(false) {
+    MockDrcomServer(int port = 61441, uint8_t login_status_code = 0x00)
+        : running_(false)
+        , client_authenticated_(false)
+        , login_status_code_(login_status_code) {
         // 初始化随机数生成器
         std::random_device rd;
         std::mt19937 gen(rd());
@@ -103,7 +107,10 @@ public:
             throw std::runtime_error("Failed to bind socket");
         }
         
-        std::cout << "Mock DRCOM Server listening on port " << port << std::endl;
+        std::cout << "Mock DRCOM Server listening on port " << port
+                  << " (login status 0x" << std::hex
+                  << static_cast<int>(login_status_code_) << std::dec << ")"
+                  << std::endl;
     }
     
     ~MockDrcomServer() {
@@ -206,12 +213,12 @@ private:
         std::cout << "Handling Login Request" << std::endl;
         
         // 简单验证（实际应该验证用户名密码）
-        client_authenticated_ = true;
+        client_authenticated_ = (login_status_code_ == 0x00);
         
         // 构建Login响应
         std::vector<uint8_t> response;
         response.push_back(0x04); // Login response type
-        response.push_back(0x00); // Success code
+        response.push_back(login_status_code_);
         response.push_back(0x00); // Reserved
         response.push_back(0x00); // Reserved
         
@@ -229,7 +236,13 @@ private:
         }
         
         sendResponse(response);
-        std::cout << "Client authenticated successfully!" << std::endl;
+        if (client_authenticated_) {
+            std::cout << "Client authenticated successfully!" << std::endl;
+        } else {
+            std::cout << "Client authentication rejected with status 0x"
+                      << std::hex << static_cast<int>(login_status_code_) << std::dec
+                      << std::endl;
+        }
     }
     
     void handleLogoutRequest(const uint8_t* /*data*/, size_t /*len*/) {
@@ -333,13 +346,18 @@ private:
 
 int main(int argc, char* argv[]) {
     int port = 61441;
+    int login_status = 0;
     
     if (argc > 1) {
         port = std::atoi(argv[1]);
     }
+
+    if (argc > 2) {
+        login_status = std::strtol(argv[2], nullptr, 0);
+    }
     
     try {
-        MockDrcomServer server(port);
+        MockDrcomServer server(port, static_cast<uint8_t>(login_status & 0xff));
         
         std::cout << "Starting Mock DRCOM Server..." << std::endl;
         std::cout << "Press Ctrl+C to stop" << std::endl;
