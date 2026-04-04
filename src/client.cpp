@@ -796,15 +796,9 @@ bool DrcomClient::handleChallengeResponse(const std::vector<uint8_t>& data, bool
         return false;
     }
 
-    if (data[1] != 0x00) {
-        if (error_message) {
-            *error_message = std::format("Challenge rejected with status 0x{:02x}", data[1]);
-        }
-        if (disconnect_reason) {
-            *disconnect_reason = is_login ? DisconnectReason::AUTH_FAILURE
-                                          : DisconnectReason::PROTOCOL_ERROR;
-        }
-        return false;
+    const uint8_t expected_subtype = is_login ? 0x02 : 0x03;
+    if (data[1] != 0x00 && data[1] != expected_subtype) {
+        logger_.debug("Unexpected challenge subtype/reserved byte: 0x{:02x}", data[1]);
     }
 
     // Extract salt

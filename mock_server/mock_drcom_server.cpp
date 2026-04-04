@@ -188,13 +188,15 @@ private:
         }
     }
     
-    void handleChallengeRequest(const uint8_t* /*data*/, size_t /*len*/) {
+    void handleChallengeRequest(const uint8_t* data, size_t len) {
         std::cout << "Handling Challenge Request" << std::endl;
+
+        const uint8_t challenge_subtype = len > 1 ? data[1] : 0x00;
         
         // 构建Challenge响应
         std::vector<uint8_t> response;
         response.push_back(0x02); // Challenge response type
-        response.push_back(0x00); // Success code
+        response.push_back(challenge_subtype); // Echo request subtype like real servers
         response.push_back(0x00); // Reserved
         response.push_back(0x00); // Reserved
         
