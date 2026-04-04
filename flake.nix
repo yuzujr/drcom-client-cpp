@@ -42,11 +42,6 @@
           ninja
           clang-tools
         ];
-
-        shellHook = ''
-          echo "drcom-client-cpp dev shell"
-          echo "  cmake -B build && cmake --build build"
-        '';
       };
     };
 }
