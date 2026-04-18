@@ -11,6 +11,10 @@
 
 ## 安装
 
+### Release
+
+在[Release](https://github.com/yuzujr/drcom-client-cpp/releases/latest)中下载Windows、MacOS、Linux版本。
+
 ### NixOS
 
 在 `flake.nix` 中添加：
