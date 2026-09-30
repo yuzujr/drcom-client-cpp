@@ -70,8 +70,10 @@ public:
     void flush() override;
     
 private:
+    std::string filename_;
     std::unique_ptr<std::ofstream> file_;
     std::mutex file_mutex_;
+    void rotateIfNeeded();
 };
 
 /**

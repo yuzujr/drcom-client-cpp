@@ -26,15 +26,41 @@ inputs.drcom-client-cpp.url = "github:yuzujr/drcom-client-cpp";
 在 NixOS 配置中：
 
 ```nix
-environment.systemPackages = [
-  inputs.drcom-client-cpp.packages.${pkgs.system}.default
-];
+imports = [ inputs.drcom-client-cpp.nixosModules.default ];
+services.drcom-client-cpp = {
+  enable = true;
+  configFile = "/etc/drcom.conf";
+};
 ```
+
+先将 `config/drcom_jlu.conf` 复制到 `/etc/drcom.conf`，填入账号信息并限制文件权限
+（例如 `chmod 600 /etc/drcom.conf`）。密码配置文件应放在 Nix store 之外。
+服务随系统启动；用 `systemctl status drcom-client-cpp` 查看状态，
+用 `journalctl -u drcom-client-cpp` 查看日志。
+
+### Windows 自动启动
+
+将 `drcom_client.exe`、填好的 `drcom.conf` 和 `scripts/windows-autostart.ps1`
+放在同一目录，在 PowerShell 中执行：
+
+```powershell
+.\windows-autostart.ps1
+```
+
+脚本为当前用户注册登录后启动的计划任务，并立即启动客户端。日志位于
+`%LOCALAPPDATA%\DrcomClient\drcom.log`，最多保留当前文件和一个备份文件。
+移除自动启动：
+
+```powershell
+.\windows-autostart.ps1 -Uninstall
+```
+
+### 临时运行
 
 不安装直接运行：
 
 ```bash
-nix run github:yuzujr/drcom-client-cpp -- /path/to/drcom.conf
+nix run github:yuzujr/drcom-client-cpp -- -c /path/to/drcom.conf
 ```
 
 ## 构建步骤
@@ -73,4 +99,7 @@ cmake --build . --target install
 
 
 ## 使用方法
-请参考配置文件中的注释。
+请参考配置文件中的注释。客户端会在没有到认证服务器的路由时等待网络；
+服务器无响应时逐步延长重试间隔（最多 1 分钟），本地路由地址变化后立即重试。
+认证被明确拒绝时会退出并记录原因，修改配置后需重新启动服务或计划任务。
+在 Linux 上默认只向标准输出写日志，由 systemd 管理日志；Windows 的文件日志会轮转。

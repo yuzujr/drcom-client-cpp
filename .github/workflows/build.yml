@@ -86,6 +86,7 @@ jobs:
           build/src/Release/drcom_client.exe
           build/mock_server/Release/mock_drcom_server.exe
           config/
+          scripts/windows-autostart.ps1
         retention-days: 5
 
   build-macos:
@@ -223,6 +224,7 @@ jobs:
         mkdir -p releases/windows
         find drcom-client-windows/ -name "drcom_client.exe" -type f -exec cp {} releases/windows/ \;
         find drcom-client-windows/ -name "mock_drcom_server.exe" -type f -exec cp {} releases/windows/ \;
+        find drcom-client-windows/ -name "windows-autostart.ps1" -type f -exec cp {} releases/windows/ \;
         if [ -d "drcom-client-windows/config" ]; then
           cp -r drcom-client-windows/config releases/windows/
         fi

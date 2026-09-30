@@ -27,3 +27,8 @@ add_subdirectory(mock_server)
 # 安装配置文件到自定义目录
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/config 
         DESTINATION ${DRCOM_INSTALL_DIR})
+
+if(WIN32)
+    install(FILES ${CMAKE_SOURCE_DIR}/scripts/windows-autostart.ps1
+            DESTINATION ${DRCOM_INSTALL_DIR}/bin)
+endif()

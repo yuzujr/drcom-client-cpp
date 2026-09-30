@@ -94,6 +94,25 @@ std::error_code UdpSocket::connect(const NetworkAddress& address) {
     return {};
 }
 
+std::optional<std::string> UdpSocket::localAddress() const {
+    if (!isValid() || !is_connected_) return std::nullopt;
+    sockaddr_in local{};
+#ifdef _WIN32
+    int length = sizeof(local);
+#else
+    socklen_t length = sizeof(local);
+#endif
+    if (::getsockname(socket_, reinterpret_cast<sockaddr*>(&local), &length) != 0 ||
+        local.sin_addr.s_addr == INADDR_ANY) {
+        return std::nullopt;
+    }
+    char buffer[INET_ADDRSTRLEN]{};
+    if (!inet_ntop(AF_INET, &local.sin_addr, buffer, sizeof(buffer))) {
+        return std::nullopt;
+    }
+    return std::string(buffer);
+}
+
 std::pair<size_t, std::error_code> UdpSocket::send(const std::vector<uint8_t>& data) {
     if (!isValid() || !is_connected_) {
         return {0, std::make_error_code(std::errc::not_connected)};

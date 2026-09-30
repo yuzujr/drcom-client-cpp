@@ -5,6 +5,7 @@
 #include <vector>
 #include <cstdint>
 #include <system_error>
+#include <optional>
 
 #ifdef _WIN32
     #include <winsock2.h>
@@ -117,6 +118,9 @@ public:
      * @brief Check if socket is valid
      */
     bool isValid() const { return socket_ != INVALID_SOCKET_VALUE; }
+
+    // The local IPv4 address selected by the OS route for a connected socket.
+    std::optional<std::string> localAddress() const;
     
 private:
     socket_t socket_{INVALID_SOCKET_VALUE};

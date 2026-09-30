@@ -1,6 +1,7 @@
 #include "drcom/logger.h"
 
 #include <chrono>
+#include <filesystem>
 #include <iomanip>
 #include <sstream>
 
@@ -32,7 +33,8 @@ void ConsoleSink::log(const LogEntry& entry) {
 }
 
 FileSink::FileSink(const std::string& filename) 
-    : file_(std::make_unique<std::ofstream>(filename, std::ios::app)) {
+    : filename_(filename), file_(std::make_unique<std::ofstream>(filename, std::ios::app)) {
+    rotateIfNeeded();
 }
 
 FileSink::~FileSink() = default;
@@ -65,6 +67,21 @@ void FileSink::log(const LogEntry& entry) {
     }
     
     *file_ << " [" << level_str << "] " << entry.message << std::endl;
+    rotateIfNeeded();
+}
+
+void FileSink::rotateIfNeeded() {
+    if (!file_ || !file_->is_open()) return;
+    constexpr std::uintmax_t kMaximumLogSize = 1024 * 1024;
+    std::error_code error;
+    if (std::filesystem::file_size(filename_, error) < kMaximumLogSize || error) return;
+    file_->close();
+    // Keep one previous file. An old, oversized log is discarded at rotation.
+    const auto backup = filename_ + ".1";
+    std::filesystem::remove(backup, error);
+    std::filesystem::rename(filename_, backup, error);
+    file_ = std::make_unique<std::ofstream>(filename_,
+        error ? std::ios::app : std::ios::trunc);
 }
 
 void FileSink::flush() {

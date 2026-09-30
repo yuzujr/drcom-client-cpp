@@ -126,7 +126,7 @@ bool DrcomClient::connect() {
         // Initialize network if needed
         if (!NetworkManager::getInstance().isInitialized()) {
             const std::string message = "Network initialization failed";
-            logger_.error(message);
+            logger_.debug(message);
             setDisconnectStatus(DisconnectReason::NETWORK_ERROR, message);
             notifyEvent(ClientEvent::NETWORK_ERROR, message);
             setState(ClientState::CLIENT_ERROR);
@@ -137,7 +137,7 @@ bool DrcomClient::connect() {
         NetworkAddress local_addr{config_.getClientConfig().ip, config_.getClientConfig().port};
         auto bind_result = socket_->bind(local_addr);
         if (bind_result) {
-            logger_.error("Failed to bind to local address: {}", bind_result.message());
+            logger_.debug("Failed to bind to local address: {}", bind_result.message());
             setDisconnectStatus(DisconnectReason::NETWORK_ERROR, bind_result.message());
             notifyEvent(ClientEvent::NETWORK_ERROR, bind_result.message());
             setState(ClientState::CLIENT_ERROR);
@@ -148,7 +148,7 @@ bool DrcomClient::connect() {
         NetworkAddress server_addr{config_.getServerConfig().ip, config_.getServerConfig().port};
         auto connect_result = socket_->connect(server_addr);
         if (connect_result) {
-            logger_.error("Failed to connect to server: {}", connect_result.message());
+            logger_.debug("Failed to connect to server: {}", connect_result.message());
             setDisconnectStatus(DisconnectReason::NETWORK_ERROR, connect_result.message());
             notifyEvent(ClientEvent::NETWORK_ERROR, connect_result.message());
             setState(ClientState::CLIENT_ERROR);
@@ -161,7 +161,7 @@ bool DrcomClient::connect() {
         std::string error_message;
         DisconnectReason disconnect_reason = DisconnectReason::NONE;
         if (!performChallenge(true, 15000, &error_message, &disconnect_reason)) {
-            logger_.error("Challenge failed: {}", error_message);
+            logger_.debug("Challenge failed: {}", error_message);
             setDisconnectStatus(disconnect_reason, error_message);
             notifyEvent(disconnect_reason == DisconnectReason::NETWORK_ERROR
                              ? ClientEvent::NETWORK_ERROR
@@ -172,7 +172,7 @@ bool DrcomClient::connect() {
         }
         
         if (!performLogin(&error_message, &disconnect_reason)) {
-            logger_.error("Login failed: {}", error_message);
+            logger_.debug("Login failed: {}", error_message);
             setDisconnectStatus(disconnect_reason, error_message);
             notifyEvent(disconnect_reason == DisconnectReason::NETWORK_ERROR
                              ? ClientEvent::NETWORK_ERROR
@@ -197,7 +197,7 @@ bool DrcomClient::connect() {
         return true;
         
     } catch (const std::exception& e) {
-        logger_.error("Exception during connection: {}", e.what());
+        logger_.debug("Exception during connection: {}", e.what());
         setDisconnectStatus(DisconnectReason::NETWORK_ERROR, e.what());
         setState(ClientState::CLIENT_ERROR);
         notifyEvent(ClientEvent::NETWORK_ERROR, e.what());
@@ -415,7 +415,7 @@ bool DrcomClient::sendKeepAliveAuth() {
     std::string error_message;
     if (!sendAndReceive(packet, response, kKeepaliveTimeoutMs, &error_message)) {
         const auto message = std::format("Keep-alive auth failed: {}", error_message);
-        logger_.error(message);
+        logger_.debug(message);
         setDisconnectStatus(DisconnectReason::KEEPALIVE_FAILURE, message);
         notifyEvent(ClientEvent::KEEPALIVE_FAILED, message);
         setState(ClientState::CLIENT_ERROR);
@@ -425,7 +425,7 @@ bool DrcomClient::sendKeepAliveAuth() {
     DisconnectReason disconnect_reason = DisconnectReason::NONE;
     bool success = handleKeepAliveAuthResponse(response, &error_message, &disconnect_reason);
     if (!success) {
-        logger_.error(error_message);
+        logger_.debug(error_message);
         setDisconnectStatus(disconnect_reason, error_message);
         notifyEvent(disconnect_reason == DisconnectReason::SERVER_DISCONNECT
                          ? ClientEvent::SERVER_DISCONNECT
@@ -455,7 +455,7 @@ bool DrcomClient::sendKeepAliveHeartbeat() {
     std::string error_message;
     if (!sendAndReceive(packet, response, kKeepaliveTimeoutMs, &error_message)) {
         const auto message = std::format("Keep-alive heartbeat failed: {}", error_message);
-        logger_.error(message);
+        logger_.debug(message);
         setDisconnectStatus(DisconnectReason::KEEPALIVE_FAILURE, message);
         notifyEvent(ClientEvent::KEEPALIVE_FAILED, message);
         setState(ClientState::CLIENT_ERROR);
@@ -466,7 +466,7 @@ bool DrcomClient::sendKeepAliveHeartbeat() {
     bool success = handleKeepAliveHeartbeatResponse(response, &error_message,
                                                     &disconnect_reason);
     if (!success) {
-        logger_.error(error_message);
+        logger_.debug(error_message);
         setDisconnectStatus(disconnect_reason, error_message);
         notifyEvent(disconnect_reason == DisconnectReason::SERVER_DISCONNECT
                          ? ClientEvent::SERVER_DISCONNECT
@@ -501,7 +501,7 @@ bool DrcomClient::sendExtraHeartbeat() {
     std::string error_message;
     if (!sendAndReceive(packet, response, kKeepaliveTimeoutMs, &error_message)) {
         const auto message = std::format("Extra heartbeat failed: {}", error_message);
-        logger_.error(message);
+        logger_.debug(message);
         setDisconnectStatus(DisconnectReason::KEEPALIVE_FAILURE, message);
         notifyEvent(ClientEvent::KEEPALIVE_FAILED, message);
         setState(ClientState::CLIENT_ERROR);
@@ -512,7 +512,7 @@ bool DrcomClient::sendExtraHeartbeat() {
     bool success = handleKeepAliveHeartbeatResponse(response, &error_message,
                                                     &disconnect_reason);
     if (!success) {
-        logger_.error(error_message);
+        logger_.debug(error_message);
         setDisconnectStatus(disconnect_reason, error_message);
         notifyEvent(disconnect_reason == DisconnectReason::SERVER_DISCONNECT
                          ? ClientEvent::SERVER_DISCONNECT
@@ -973,7 +973,7 @@ bool DrcomClient::sendAndReceive(const std::vector<uint8_t>& send_data,
     // Set timeout
     auto timeout_error = socket_->setTimeout(timeout_ms);
     if (timeout_error) {
-        logger_.error("Failed to set socket timeout: {}", timeout_error.message());
+        logger_.debug("Failed to set socket timeout: {}", timeout_error.message());
         if (error_message) {
             *error_message = std::format("Failed to set socket timeout: {}",
                                          timeout_error.message());
@@ -984,7 +984,7 @@ bool DrcomClient::sendAndReceive(const std::vector<uint8_t>& send_data,
     // Send data
     auto [sent, send_error] = socket_->send(send_data);
     if (send_error) {
-        logger_.error("Send failed: {}", send_error.message());
+        logger_.debug("Send failed: {}", send_error.message());
         if (error_message) {
             *error_message = std::format("Send failed: {}", send_error.message());
         }
@@ -999,7 +999,7 @@ bool DrcomClient::sendAndReceive(const std::vector<uint8_t>& send_data,
     // Receive response
     auto [received, recv_error] = socket_->receive(receive_data);
     if (recv_error) {
-        logger_.error("Receive failed: {}", recv_error.message());
+        logger_.debug("Receive failed: {}", recv_error.message());
         if (error_message) {
             *error_message = std::format("Receive failed: {}", recv_error.message());
         }

@@ -12,6 +12,8 @@
     in
     {
 
+      nixosModules.default = import ./nix/module.nix { inherit self; };
+
       # ── Package ────────────────────────────────────────────────────────────
       packages.${system}.default = pkgs.stdenv.mkDerivation {
         pname = "drcom-client-cpp";
@@ -32,6 +34,7 @@
           description = "DRCOM 802.1X client for JLU";
           homepage = "https://github.com/yuzujr/drcom-client-cpp";
           license = pkgs.lib.licenses.mit;
+          mainProgram = "drcom_client";
           platforms = pkgs.lib.platforms.linux;
         };
       };

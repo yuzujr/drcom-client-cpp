@@ -4,6 +4,7 @@
 #include <csignal>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <thread>
 
@@ -28,6 +29,8 @@ namespace {
 
 constexpr auto kLoopPollInterval = std::chrono::milliseconds(100);
 constexpr auto kStatisticsInterval = std::chrono::seconds(30);
+constexpr auto kNetworkPollInterval = std::chrono::seconds(2);
+constexpr auto kMaximumRetryDelay = std::chrono::seconds(60);
 
 // Global client instance for signal handling
 std::atomic<bool> g_shutdown_requested{false};
@@ -79,7 +82,7 @@ void logConfiguration(drcom::Logger& logger, const drcom::Config& config) {
 
 void logStatistics(drcom::Logger& logger,
                    const drcom::DrcomClient::Statistics& stats) {
-    logger.info("Statistics - Auth: {}/{}, Heartbeat: {}/{}, Bytes: {}/{}",
+    logger.debug("Statistics - Auth: {}/{}, Heartbeat: {}/{}, Bytes: {}/{}",
                 stats.auth_packets_sent, stats.auth_packets_received,
                 stats.heartbeat_packets_sent, stats.heartbeat_packets_received,
                 stats.bytes_sent, stats.bytes_received);
@@ -103,25 +106,25 @@ void configureClientCallbacks(drcom::DrcomClient& client,
         [&logger](drcom::ClientEvent event, const std::string& message) {
             switch (event) {
                 case drcom::ClientEvent::STATE_CHANGED:
-                    logger.info("State changed: {}", message);
+                    logger.debug("State changed: {}", message);
                     break;
                 case drcom::ClientEvent::AUTH_SUCCESS:
-                    logger.info("Authentication successful: {}", message);
+                    logger.debug("Authentication successful: {}", message);
                     break;
                 case drcom::ClientEvent::AUTH_FAILED:
-                    logger.error("Authentication failed: {}", message);
+                    logger.debug("Authentication failed: {}", message);
                     break;
                 case drcom::ClientEvent::KEEPALIVE_SUCCESS:
                     logger.debug("Keep-alive successful: {}", message);
                     break;
                 case drcom::ClientEvent::KEEPALIVE_FAILED:
-                    logger.warn("Keep-alive failed: {}", message);
+                    logger.debug("Keep-alive failed: {}", message);
                     break;
                 case drcom::ClientEvent::NETWORK_ERROR:
-                    logger.error("Network error: {}", message);
+                    logger.debug("Network error: {}", message);
                     break;
                 case drcom::ClientEvent::SERVER_DISCONNECT:
-                    logger.warn("Server disconnect: {}", message);
+                    logger.debug("Server disconnect: {}", message);
                     break;
             }
         });
@@ -156,82 +159,102 @@ bool runConnectedLoop(drcom::Logger& logger) {
     return !shutdownRequested();
 }
 
-int runClientSupervisor(drcom::Logger& logger, const drcom::Config& config) {
-    const auto reconnect_delay =
-        std::chrono::seconds(config.getClientConfig().reconnect_interval);
+std::optional<std::string> routeSource(const drcom::Config& config) {
+    drcom::UdpSocket probe;
+    const auto& server = config.getServerConfig();
+    if (probe.connect({server.ip, server.port})) return std::nullopt;
+    return probe.localAddress();
+}
 
-    int exit_code = 0;
-    uint64_t connect_attempt = 0;
+// Polling the route keeps this portable and also catches a changed Wi-Fi or
+// Ethernet address while the client is sleeping after a failed handshake.
+bool waitForNetworkChange(const drcom::Config& config,
+                          const std::optional<std::string>& source,
+                          std::chrono::seconds delay) {
+    const auto deadline = std::chrono::steady_clock::now() + delay;
+    while (!shutdownRequested() && std::chrono::steady_clock::now() < deadline) {
+        const auto remaining = deadline - std::chrono::steady_clock::now();
+        const auto step = (std::min)(remaining,
+            std::chrono::duration_cast<std::chrono::steady_clock::duration>(kNetworkPollInterval));
+        if (!waitInterruptibly(std::chrono::duration_cast<std::chrono::milliseconds>(step))) break;
+        if (routeSource(config) != source) return true;
+    }
+    return false;
+}
+
+std::chrono::seconds retryDelay(const drcom::Config& config, unsigned failures) {
+    const auto base = (std::min)(config.getClientConfig().reconnect_interval,
+                                 static_cast<uint32_t>(kMaximumRetryDelay.count()));
+    const auto multiplier = uint32_t{1} << (std::min)(failures - 1, 8u);
+    return std::chrono::seconds((std::min)(base * multiplier,
+                                           static_cast<uint32_t>(kMaximumRetryDelay.count())));
+}
+
+int runClientSupervisor(drcom::Logger& logger, const drcom::Config& config) {
+    std::optional<std::string> previous_source;
+    std::optional<drcom::DisconnectReason> previous_failure;
+    unsigned failures = 0;
+    bool waiting_for_route = false;
 
     while (!shutdownRequested()) {
-        ++connect_attempt;
-        g_client = createClient(logger);
-
-        logger.info("Connecting to DRCOM server (attempt {})...", connect_attempt);
-        if (!g_client->connect()) {
-            exit_code = 1;
-            const auto disconnect_reason = g_client->getLastDisconnectReason();
-            const auto disconnect_message = g_client->getLastDisconnectMessage();
-
-            if (!config.getClientConfig().auto_reconnect ||
-                !g_client->shouldReconnect() || shutdownRequested()) {
-                logger.error(
-                    "Failed to connect to server: {} ({})",
-                    messageOrDefault(disconnect_message, "unknown error"),
-                    drcom::disconnectReasonToString(disconnect_reason));
-                break;
-            }
-
-            logger.warn(
-                "Connection attempt failed: {} ({}), retrying in {} seconds",
-                messageOrDefault(disconnect_message, "unknown error"),
-                drcom::disconnectReasonToString(disconnect_reason),
-                config.getClientConfig().reconnect_interval);
-            g_client.reset();
-            if (!waitInterruptibly(std::chrono::duration_cast<std::chrono::milliseconds>(
-                    reconnect_delay))) {
-                break;
-            }
+        const auto source = routeSource(config);
+        if (!source) {
+            if (!waiting_for_route) logger.info("No route to authentication server; waiting for network");
+            waiting_for_route = true;
+            previous_source.reset();
+            previous_failure.reset();
+            failures = 0;
+            waitInterruptibly(std::chrono::duration_cast<std::chrono::milliseconds>(kNetworkPollInterval));
             continue;
         }
 
-        exit_code = 0;
-        logger.info("Connected successfully! Press Ctrl+C to disconnect.");
+        if (waiting_for_route || source != previous_source) {
+            logger.info("Network route available via {}; trying authentication", *source);
+            failures = 0;
+            previous_failure.reset();
+        }
+        waiting_for_route = false;
+        previous_source = source;
+        g_client = createClient(logger);
 
-        if (!runConnectedLoop(logger)) {
-            break;
+        const bool connected = g_client->connect();
+        if (connected) {
+            logger.info("Connected successfully");
+            failures = 0;
+            previous_failure.reset();
+            if (!runConnectedLoop(logger)) break;
         }
 
-        exit_code = 1;
-        const auto end_state = g_client->getState();
-        const auto disconnect_reason = g_client->getLastDisconnectReason();
-        const auto disconnect_message = g_client->getLastDisconnectMessage();
-        const bool should_reconnect =
-            config.getClientConfig().auto_reconnect && g_client->shouldReconnect();
+        const auto reason = g_client->getLastDisconnectReason();
+        const auto message = g_client->getLastDisconnectMessage();
+        const bool reconnect = config.getClientConfig().auto_reconnect &&
+                               g_client->shouldReconnect();
         g_client.reset();
 
-        if (!should_reconnect) {
-            logger.warn(
-                "Connection ended in state {} with {} ({}); auto reconnect {}",
-                drcom::clientStateToString(end_state),
-                messageOrDefault(disconnect_message, "no detail"),
-                drcom::disconnectReasonToString(disconnect_reason),
-                config.getClientConfig().auto_reconnect ? "stopped by policy"
-                                                        : "is disabled");
-            break;
+        if (!reconnect) {
+            logger.error("Authentication stopped: {} ({})",
+                         messageOrDefault(message, "unknown error"),
+                         drcom::disconnectReasonToString(reason));
+            return 1;
         }
 
-        logger.warn("Connection lost (state: {}, {}), retrying in {} seconds",
-                    drcom::clientStateToString(end_state),
-                    messageOrDefault(disconnect_message, "no detail"),
-                    config.getClientConfig().reconnect_interval);
-        if (!waitInterruptibly(std::chrono::duration_cast<std::chrono::milliseconds>(
-                reconnect_delay))) {
-            break;
+        ++failures;
+        const auto delay = retryDelay(config, failures);
+        if (!previous_failure || *previous_failure != reason) {
+            logger.warn("Authentication unavailable: {} ({}); retrying with backoff (up to {}s)",
+                        messageOrDefault(message, "unknown error"),
+                        drcom::disconnectReasonToString(reason),
+                        kMaximumRetryDelay.count());
+        } else {
+            logger.debug("Authentication retry {} failed: {}; next attempt in {}s",
+                         failures, messageOrDefault(message, "unknown error"), delay.count());
+        }
+        previous_failure = reason;
+        if (waitForNetworkChange(config, source, delay)) {
+            previous_source.reset();
         }
     }
-
-    return exit_code;
+    return 0;
 }
 
 void shutdownClient(drcom::Logger& logger) {
@@ -286,7 +309,9 @@ int main(int argc, char* argv[]) {
         // Initialize logging
         auto& logger = drcom::Logger::getInstance();
         logger.addSink(std::make_unique<drcom::ConsoleSink>());
+#ifdef _WIN32
         logger.addSink(std::make_unique<drcom::FileSink>("drcom.log"));
+#endif
         logger.setLevel(drcom::LogLevel::INFO);
 
         logger.info("Starting DRCOM client...");
