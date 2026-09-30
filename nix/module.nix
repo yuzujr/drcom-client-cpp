@@ -8,7 +8,7 @@ in
     enable = lib.mkEnableOption "DRCOM campus network authentication";
     package = lib.mkOption {
       type = lib.types.package;
-      default = self.packages.${pkgs.system}.default;
+      default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
       description = "DRCOM client package to run.";
     };
     configFile = lib.mkOption {
