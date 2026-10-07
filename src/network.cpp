@@ -63,19 +63,19 @@ std::vector<NetworkInterface> listNetworkInterfaces() {
                 continue;
             }
 
-            NetworkInterface interface;
-            interface.name = adapter->AdapterName ? adapter->AdapterName : "";
-            interface.ipv4 = ip;
-            interface.is_up = up;
-            interface.is_loopback = loopback;
-            interface.is_physical = adapter->IfType == IF_TYPE_ETHERNET_CSMACD ||
+            NetworkInterface network_interface;
+            network_interface.name = adapter->AdapterName ? adapter->AdapterName : "";
+            network_interface.ipv4 = ip;
+            network_interface.is_up = up;
+            network_interface.is_loopback = loopback;
+            network_interface.is_physical = adapter->IfType == IF_TYPE_ETHERNET_CSMACD ||
                                     adapter->IfType == IF_TYPE_IEEE80211;
-            if (adapter->PhysicalAddressLength >= interface.mac.size()) {
+            if (adapter->PhysicalAddressLength >= network_interface.mac.size()) {
                 std::copy_n(adapter->PhysicalAddress,
-                            interface.mac.size(), interface.mac.begin());
-                interface.has_mac = true;
+                            network_interface.mac.size(), network_interface.mac.begin());
+                network_interface.has_mac = true;
             }
-            interfaces.push_back(std::move(interface));
+            interfaces.push_back(std::move(network_interface));
         }
     }
 #else
@@ -100,16 +100,16 @@ std::vector<NetworkInterface> listNetworkInterfaces() {
             continue;
         }
 
-        NetworkInterface interface;
-        interface.name = address->ifa_name;
-        interface.ipv4 = ip;
-        interface.is_up = (address->ifa_flags & IFF_UP) != 0;
-        interface.is_loopback = (address->ifa_flags & IFF_LOOPBACK) != 0;
+        NetworkInterface network_interface;
+        network_interface.name = address->ifa_name;
+        network_interface.ipv4 = ip;
+        network_interface.is_up = (address->ifa_flags & IFF_UP) != 0;
+        network_interface.is_loopback = (address->ifa_flags & IFF_LOOPBACK) != 0;
 
 #ifdef __linux__
         std::error_code device_error;
-        interface.is_physical = std::filesystem::exists(
-            std::filesystem::path("/sys/class/net") / interface.name / "device",
+        network_interface.is_physical = std::filesystem::exists(
+            std::filesystem::path("/sys/class/net") / network_interface.name / "device",
             device_error);
         if (socket_fd >= 0) {
             struct ifreq request{};
@@ -118,9 +118,9 @@ std::vector<NetworkInterface> listNetworkInterfaces() {
             if (ioctl(socket_fd, SIOCGIFHWADDR, &request) == 0 &&
                 request.ifr_hwaddr.sa_family == ARPHRD_ETHER) {
                 std::copy_n(reinterpret_cast<const uint8_t*>(request.ifr_hwaddr.sa_data),
-                            interface.mac.size(), interface.mac.begin());
-                interface.has_mac = std::any_of(interface.mac.begin(),
-                                                interface.mac.end(),
+                            network_interface.mac.size(), network_interface.mac.begin());
+                network_interface.has_mac = std::any_of(network_interface.mac.begin(),
+                                                network_interface.mac.end(),
                                                 [](uint8_t value) { return value != 0; });
             }
         }
@@ -131,16 +131,16 @@ std::vector<NetworkInterface> listNetworkInterfaces() {
                 continue;
             }
             const auto* sockaddr = reinterpret_cast<const sockaddr_dl*>(link->ifa_addr);
-            interface.is_physical = sockaddr->sdl_type == IFT_ETHER;
-            if (sockaddr->sdl_alen >= interface.mac.size()) {
+            network_interface.is_physical = sockaddr->sdl_type == IFT_ETHER;
+            if (sockaddr->sdl_alen >= network_interface.mac.size()) {
                 std::copy_n(reinterpret_cast<const uint8_t*>(LLADDR(sockaddr)),
-                            interface.mac.size(), interface.mac.begin());
-                interface.has_mac = true;
+                            network_interface.mac.size(), network_interface.mac.begin());
+                network_interface.has_mac = true;
             }
             break;
         }
 #endif
-        interfaces.push_back(std::move(interface));
+        interfaces.push_back(std::move(network_interface));
     }
 
 #ifdef __linux__
@@ -172,14 +172,14 @@ std::optional<NetworkInterface> selectInterfaceForRoutes(
               std::dec >> refs >> uses >> metric >> std::hex >> mask)) continue;
         if (!(flags & 1) || (flags & 0x200) ||
             (address.s_addr & mask) != network) continue;
-        const auto interface = std::find_if(interfaces.begin(), interfaces.end(),
+        const auto network_interface = std::find_if(interfaces.begin(), interfaces.end(),
             [&](const auto& item) {
                 return item.name == name && item.is_up && item.is_physical && item.has_mac;
             });
-        if (interface == interfaces.end()) continue;
+        if (network_interface == interfaces.end()) continue;
         const int prefix = std::popcount(static_cast<uint32_t>(mask));
         if (prefix > best_prefix || (prefix == best_prefix && metric < best_metric)) {
-            selected = *interface;
+            selected = *network_interface;
             best_prefix = prefix;
             best_metric = metric;
         }

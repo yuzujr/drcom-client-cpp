@@ -148,14 +148,14 @@ struct RouteInfo {
 std::optional<RouteInfo> routeSource(const drcom::Config& config,
                                     const std::string& requested_bind) {
     const auto& server = config.getServerConfig();
-    const auto interface = drcom::selectNetworkInterface(
+    const auto network_interface = drcom::selectNetworkInterface(
         {server.ip, server.port}, requested_bind);
-    if (!interface) return std::nullopt;
+    if (!network_interface) return std::nullopt;
     drcom::UdpSocket probe;
-    if (probe.bind({interface->ipv4, 0}) ||
+    if (probe.bind({network_interface->ipv4, 0}) ||
         probe.connect({server.ip, server.port})) return std::nullopt;
-    return RouteInfo{interface->ipv4, interface->name, interface->mac,
-                     interface->has_mac};
+    return RouteInfo{network_interface->ipv4, network_interface->name, network_interface->mac,
+                     network_interface->has_mac};
 }
 
 enum class ConnectedLoopResult { Shutdown, Disconnected, NetworkChanged };
