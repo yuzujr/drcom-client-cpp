@@ -170,9 +170,15 @@ struct RouteInfo {
     }
 };
 
-bool isPhysicalInterface(const drcom::NetworkInterface& interface) {
-    if (!interface.is_up || interface.is_loopback || !interface.has_mac ||
-        interface.ipv4.empty()) {
+bool isUsableInterface(const drcom::NetworkInterface& interface,
+                       bool allow_loopback) {
+    if (!interface.is_up || interface.ipv4.empty()) {
+        return false;
+    }
+    if (interface.is_loopback) {
+        return allow_loopback;
+    }
+    if (!interface.has_mac) {
         return false;
     }
 
@@ -188,8 +194,9 @@ bool isPhysicalInterface(const drcom::NetworkInterface& interface) {
 
 std::optional<RouteInfo> routeSource(drcom::Config& config) {
     const auto& server = config.getServerConfig();
+    const bool local_server = server.ip.rfind("127.", 0) == 0;
     for (const auto& interface : drcom::listNetworkInterfaces()) {
-        if (!isPhysicalInterface(interface)) {
+        if (!isUsableInterface(interface, local_server)) {
             continue;
         }
 
@@ -209,7 +216,9 @@ std::optional<RouteInfo> routeSource(drcom::Config& config) {
 
         auto user_config = config.getUserConfig();
         user_config.ip = *source;
-        user_config.mac = interface.mac;
+        if (interface.has_mac) {
+            user_config.mac = interface.mac;
+        }
         config.setUserConfig(user_config);
 
         auto client_config = config.getClientConfig();
