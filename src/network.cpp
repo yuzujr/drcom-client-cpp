@@ -1,8 +1,146 @@
 #include "drcom/network.h"
 
+#include <algorithm>
 #include <cstring>
 
+#ifdef _WIN32
+#include <iphlpapi.h>
+#else
+#include <ifaddrs.h>
+#include <net/if.h>
+#ifdef __APPLE__
+#include <net/if_dl.h>
+#endif
+#ifdef __linux__
+#include <netpacket/packet.h>
+#include <net/if_arp.h>
+#include <sys/ioctl.h>
+#endif
+#endif
+
 namespace drcom {
+
+std::vector<NetworkInterface> listNetworkInterfaces() {
+    std::vector<NetworkInterface> interfaces;
+
+#ifdef _WIN32
+    ULONG buffer_size = 0;
+    if (GetAdaptersAddresses(AF_INET, GAA_FLAG_SKIP_ANYCAST |
+                                      GAA_FLAG_SKIP_MULTICAST |
+                                      GAA_FLAG_SKIP_DNS_SERVER,
+                              nullptr, nullptr, &buffer_size) != ERROR_BUFFER_OVERFLOW) {
+        return interfaces;
+    }
+
+    std::vector<unsigned char> buffer(buffer_size);
+    auto* adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data());
+    if (GetAdaptersAddresses(AF_INET, GAA_FLAG_SKIP_ANYCAST |
+                                      GAA_FLAG_SKIP_MULTICAST |
+                                      GAA_FLAG_SKIP_DNS_SERVER,
+                              nullptr, adapters, &buffer_size) != NO_ERROR) {
+        return interfaces;
+    }
+
+    for (auto* adapter = adapters; adapter != nullptr; adapter = adapter->Next) {
+        const bool up = adapter->OperStatus == IfOperStatusUp;
+        const bool loopback = adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK;
+        for (auto* address = adapter->FirstUnicastAddress;
+             address != nullptr; address = address->Next) {
+            if (!address->Address.lpSockaddr ||
+                address->Address.lpSockaddr->sa_family != AF_INET) {
+                continue;
+            }
+
+            const auto* addr = reinterpret_cast<const sockaddr_in*>(
+                address->Address.lpSockaddr);
+            char ip[INET_ADDRSTRLEN]{};
+            if (!inet_ntop(AF_INET, &addr->sin_addr, ip, sizeof(ip))) {
+                continue;
+            }
+
+            NetworkInterface interface;
+            interface.name = adapter->AdapterName ? adapter->AdapterName : "";
+            interface.ipv4 = ip;
+            interface.is_up = up;
+            interface.is_loopback = loopback;
+            if (adapter->PhysicalAddressLength >= interface.mac.size()) {
+                std::copy_n(adapter->PhysicalAddress,
+                            interface.mac.size(), interface.mac.begin());
+                interface.has_mac = true;
+            }
+            interfaces.push_back(std::move(interface));
+        }
+    }
+#else
+    struct ifaddrs* addresses = nullptr;
+    if (getifaddrs(&addresses) != 0) {
+        return interfaces;
+    }
+
+#ifdef __linux__
+    const int socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
+#endif
+
+    for (auto* address = addresses; address != nullptr; address = address->ifa_next) {
+        if (!address->ifa_name || !address->ifa_addr ||
+            address->ifa_addr->sa_family != AF_INET) {
+            continue;
+        }
+
+        char ip[INET_ADDRSTRLEN]{};
+        const auto* addr = reinterpret_cast<const sockaddr_in*>(address->ifa_addr);
+        if (!inet_ntop(AF_INET, &addr->sin_addr, ip, sizeof(ip))) {
+            continue;
+        }
+
+        NetworkInterface interface;
+        interface.name = address->ifa_name;
+        interface.ipv4 = ip;
+        interface.is_up = (address->ifa_flags & IFF_UP) != 0;
+        interface.is_loopback = (address->ifa_flags & IFF_LOOPBACK) != 0;
+
+#ifdef __linux__
+        if (socket_fd >= 0) {
+            struct ifreq request{};
+            std::strncpy(request.ifr_name, address->ifa_name,
+                         sizeof(request.ifr_name) - 1);
+            if (ioctl(socket_fd, SIOCGIFHWADDR, &request) == 0 &&
+                request.ifr_hwaddr.sa_family == ARPHRD_ETHER) {
+                std::copy_n(reinterpret_cast<const uint8_t*>(request.ifr_hwaddr.sa_data),
+                            interface.mac.size(), interface.mac.begin());
+                interface.has_mac = std::any_of(interface.mac.begin(),
+                                                interface.mac.end(),
+                                                [](uint8_t value) { return value != 0; });
+            }
+        }
+#elif defined(__APPLE__)
+        for (auto* link = addresses; link != nullptr; link = link->ifa_next) {
+            if (!link->ifa_name || std::strcmp(link->ifa_name, address->ifa_name) != 0 ||
+                !link->ifa_addr || link->ifa_addr->sa_family != AF_LINK) {
+                continue;
+            }
+            const auto* sockaddr = reinterpret_cast<const sockaddr_dl*>(link->ifa_addr);
+            if (sockaddr->sdl_alen >= interface.mac.size()) {
+                std::copy_n(reinterpret_cast<const uint8_t*>(LLADDR(sockaddr)),
+                            interface.mac.size(), interface.mac.begin());
+                interface.has_mac = true;
+            }
+            break;
+        }
+#endif
+        interfaces.push_back(std::move(interface));
+    }
+
+#ifdef __linux__
+    if (socket_fd >= 0) {
+        ::close(socket_fd);
+    }
+#endif
+    freeifaddrs(addresses);
+#endif
+
+    return interfaces;
+}
 
 NetworkInitializer::NetworkInitializer() {
 #ifdef _WIN32

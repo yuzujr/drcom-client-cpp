@@ -5,8 +5,10 @@
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <array>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 #include "drcom/drcom.h"
 
@@ -159,17 +161,70 @@ bool runConnectedLoop(drcom::Logger& logger) {
     return !shutdownRequested();
 }
 
-std::optional<std::string> routeSource(const drcom::Config& config) {
-    drcom::UdpSocket probe;
+struct RouteInfo {
+    std::string source;
+    std::string interface_name;
+
+    bool operator==(const RouteInfo& other) const {
+        return source == other.source && interface_name == other.interface_name;
+    }
+};
+
+bool isPhysicalInterface(const drcom::NetworkInterface& interface) {
+    if (!interface.is_up || interface.is_loopback || !interface.has_mac ||
+        interface.ipv4.empty()) {
+        return false;
+    }
+
+    const auto& name = interface.name;
+    constexpr std::array<std::string_view, 10> virtual_prefixes = {
+        "Meta", "tailscale", "tun", "tap", "wg", "docker", "br-",
+        "virbr", "veth", "podman"};
+    return std::none_of(virtual_prefixes.begin(), virtual_prefixes.end(),
+                        [&name](std::string_view prefix) {
+                            return name.rfind(prefix, 0) == 0;
+                        });
+}
+
+std::optional<RouteInfo> routeSource(drcom::Config& config) {
     const auto& server = config.getServerConfig();
-    if (probe.connect({server.ip, server.port})) return std::nullopt;
-    return probe.localAddress();
+    for (const auto& interface : drcom::listNetworkInterfaces()) {
+        if (!isPhysicalInterface(interface)) {
+            continue;
+        }
+
+        // Binding the probe to the interface address makes Linux select the
+        // physical route instead of a transparent proxy/TUN policy route.
+        drcom::UdpSocket probe;
+        if (probe.bind({interface.ipv4, 0})) {
+            continue;
+        }
+        if (probe.connect({server.ip, server.port})) {
+            continue;
+        }
+        const auto source = probe.localAddress();
+        if (!source || *source != interface.ipv4) {
+            continue;
+        }
+
+        auto user_config = config.getUserConfig();
+        user_config.ip = *source;
+        user_config.mac = interface.mac;
+        config.setUserConfig(user_config);
+
+        auto client_config = config.getClientConfig();
+        client_config.ip = *source;
+        config.setClientConfig(client_config);
+        return RouteInfo{*source, interface.name};
+    }
+
+    return std::nullopt;
 }
 
 // Polling the route keeps this portable and also catches a changed Wi-Fi or
 // Ethernet address while the client is sleeping after a failed handshake.
-bool waitForNetworkChange(const drcom::Config& config,
-                          const std::optional<std::string>& source,
+bool waitForNetworkChange(drcom::Config& config,
+                          const std::optional<RouteInfo>& source,
                           std::chrono::seconds delay) {
     const auto deadline = std::chrono::steady_clock::now() + delay;
     while (!shutdownRequested() && std::chrono::steady_clock::now() < deadline) {
@@ -190,8 +245,8 @@ std::chrono::seconds retryDelay(const drcom::Config& config, unsigned failures) 
                                            static_cast<uint32_t>(kMaximumRetryDelay.count())));
 }
 
-int runClientSupervisor(drcom::Logger& logger, const drcom::Config& config) {
-    std::optional<std::string> previous_source;
+int runClientSupervisor(drcom::Logger& logger, drcom::Config& config) {
+    std::optional<RouteInfo> previous_source;
     std::optional<drcom::DisconnectReason> previous_failure;
     unsigned failures = 0;
     bool waiting_for_route = false;
@@ -209,7 +264,8 @@ int runClientSupervisor(drcom::Logger& logger, const drcom::Config& config) {
         }
 
         if (waiting_for_route || source != previous_source) {
-            logger.info("Network route available via {}; trying authentication", *source);
+            logger.info("Network route available via {} ({}); trying authentication",
+                        source->source, source->interface_name);
             failures = 0;
             previous_failure.reset();
         }

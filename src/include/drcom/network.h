@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <system_error>
 #include <optional>
+#include <array>
 
 #ifdef _WIN32
     #include <winsock2.h>
@@ -34,6 +35,23 @@ struct NetworkAddress {
     NetworkAddress(std::string ip_addr, uint16_t port_num) 
         : ip(std::move(ip_addr)), port(port_num) {}
 };
+
+/**
+ * @brief An active IPv4 interface that can be used for campus authentication.
+ */
+struct NetworkInterface {
+    std::string name;
+    std::string ipv4;
+    std::array<uint8_t, 6> mac{};
+    bool has_mac{false};
+    bool is_up{false};
+    bool is_loopback{false};
+};
+
+/**
+ * @brief Enumerate active IPv4 interfaces and their hardware addresses.
+ */
+std::vector<NetworkInterface> listNetworkInterfaces();
 
 /**
  * @brief Cross-platform UDP socket wrapper

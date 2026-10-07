@@ -15,7 +15,7 @@ target_include_directories(drcom_client PRIVATE
 )
 
 if(WIN32)
-    target_link_libraries(drcom_client ws2_32)
+    target_link_libraries(drcom_client ws2_32 iphlpapi)
 endif()
 
 install(TARGETS drcom_client
