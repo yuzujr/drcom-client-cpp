@@ -38,6 +38,9 @@ jobs:
         cd build
         make -j$(nproc)
     
+    - name: Test network selection
+      run: ctest --test-dir build --output-on-failure
+
     - name: Test build artifacts
       run: |
         test -f build/src/drcom_client
@@ -189,18 +192,7 @@ jobs:
     
     - name: Run integration test
       run: |
-        # 启动 mock 服务器
-        "$MOCK_SERVER" &
-        SERVER_PID=$!
-        sleep 2
-        
-        # 运行客户端测试
-        timeout 10s "$DRCOM_CLIENT" -c config/drcom_test.conf || echo "Client test completed"
-        
-        # 清理
-        kill $SERVER_PID || true
-        
-        echo "Integration test completed"
+        python3 tests/delayed_keepalive.py "$DRCOM_CLIENT" "$MOCK_SERVER"
 
   create-release:
     runs-on: ubuntu-latest

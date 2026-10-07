@@ -7,6 +7,7 @@
 #include <system_error>
 #include <optional>
 #include <array>
+#include <istream>
 
 #ifdef _WIN32
     #include <winsock2.h>
@@ -46,12 +47,22 @@ struct NetworkInterface {
     bool has_mac{false};
     bool is_up{false};
     bool is_loopback{false};
+    bool is_physical{false};
 };
 
 /**
  * @brief Enumerate active IPv4 interfaces and their hardware addresses.
  */
 std::vector<NetworkInterface> listNetworkInterfaces();
+
+// Selection does not send packets or change authentication configuration.
+std::optional<NetworkInterface> selectNetworkInterface(
+    const NetworkAddress& server, const std::string& bind_ip);
+#ifdef __linux__
+std::optional<NetworkInterface> selectInterfaceForRoutes(
+    const std::vector<NetworkInterface>& interfaces,
+    const std::string& destination, std::istream& routes);
+#endif
 
 /**
  * @brief Cross-platform UDP socket wrapper

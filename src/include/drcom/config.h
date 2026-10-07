@@ -41,6 +41,7 @@ public:
         uint16_t port;
         bool debug_enabled{false};
         bool auto_reconnect{true};
+        bool auto_identity{true};
         uint32_t reconnect_interval{3};
     };
     

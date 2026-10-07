@@ -101,6 +101,8 @@ bool Config::loadFromFile(const std::string& filename) {
             client_config_.debug_enabled = parseBoolean(value);
         } else if (key == "auto_reconnect") {
             client_config_.auto_reconnect = parseBoolean(value);
+        } else if (key == "auto_identity") {
+            client_config_.auto_identity = parseBoolean(value);
         } else if (key == "reconnect_interval") {
             try {
                 client_config_.reconnect_interval = static_cast<uint32_t>(std::stoul(value));
@@ -168,6 +170,7 @@ bool Config::saveToFile(const std::string& filename) const {
     file << "client_port=" << client_config_.port << "\n";
     file << "debug=" << (client_config_.debug_enabled ? "true" : "false") << "\n";
     file << "auto_reconnect=" << (client_config_.auto_reconnect ? "true" : "false") << "\n";
+    file << "auto_identity=" << (client_config_.auto_identity ? "true" : "false") << "\n";
     file << "reconnect_interval=" << client_config_.reconnect_interval << "\n";
     file << "auth_interval=" << protocol_config_.auth_interval << "\n";
     file << "heartbeat_interval=" << protocol_config_.heartbeat_interval << "\n";

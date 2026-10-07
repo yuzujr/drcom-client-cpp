@@ -18,7 +18,7 @@
 
 namespace drcom {
 namespace {
-constexpr int kKeepaliveTimeoutMs = 500;
+constexpr int kKeepaliveTimeoutMs = 2000;
 constexpr int kDisconnectTimeoutMs = 500;
 
 uint8_t randomByte() {

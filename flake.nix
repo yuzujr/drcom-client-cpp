@@ -21,6 +21,7 @@
         src = ./.;
 
         nativeBuildInputs = [ pkgs.cmake ];
+        doCheck = true;
 
         installPhase = ''
           runHook preInstall

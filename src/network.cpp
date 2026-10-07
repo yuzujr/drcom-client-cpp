@@ -2,6 +2,11 @@
 
 #include <algorithm>
 #include <cstring>
+#include <bit>
+#include <filesystem>
+#include <fstream>
+#include <limits>
+#include <sstream>
 
 #ifdef _WIN32
 #include <iphlpapi.h>
@@ -10,9 +15,9 @@
 #include <net/if.h>
 #ifdef __APPLE__
 #include <net/if_dl.h>
+#include <net/if_types.h>
 #endif
 #ifdef __linux__
-#include <netpacket/packet.h>
 #include <net/if_arp.h>
 #include <sys/ioctl.h>
 #endif
@@ -63,6 +68,8 @@ std::vector<NetworkInterface> listNetworkInterfaces() {
             interface.ipv4 = ip;
             interface.is_up = up;
             interface.is_loopback = loopback;
+            interface.is_physical = adapter->IfType == IF_TYPE_ETHERNET_CSMACD ||
+                                    adapter->IfType == IF_TYPE_IEEE80211;
             if (adapter->PhysicalAddressLength >= interface.mac.size()) {
                 std::copy_n(adapter->PhysicalAddress,
                             interface.mac.size(), interface.mac.begin());
@@ -100,6 +107,10 @@ std::vector<NetworkInterface> listNetworkInterfaces() {
         interface.is_loopback = (address->ifa_flags & IFF_LOOPBACK) != 0;
 
 #ifdef __linux__
+        std::error_code device_error;
+        interface.is_physical = std::filesystem::exists(
+            std::filesystem::path("/sys/class/net") / interface.name / "device",
+            device_error);
         if (socket_fd >= 0) {
             struct ifreq request{};
             std::strncpy(request.ifr_name, address->ifa_name,
@@ -120,6 +131,7 @@ std::vector<NetworkInterface> listNetworkInterfaces() {
                 continue;
             }
             const auto* sockaddr = reinterpret_cast<const sockaddr_dl*>(link->ifa_addr);
+            interface.is_physical = sockaddr->sdl_type == IFT_ETHER;
             if (sockaddr->sdl_alen >= interface.mac.size()) {
                 std::copy_n(reinterpret_cast<const uint8_t*>(LLADDR(sockaddr)),
                             interface.mac.size(), interface.mac.begin());
@@ -140,6 +152,80 @@ std::vector<NetworkInterface> listNetworkInterfaces() {
 #endif
 
     return interfaces;
+}
+
+#ifdef __linux__
+std::optional<NetworkInterface> selectInterfaceForRoutes(
+    const std::vector<NetworkInterface>& interfaces,
+    const std::string& destination, std::istream& routes) {
+    in_addr address{};
+    if (inet_pton(AF_INET, destination.c_str(), &address) != 1) return std::nullopt;
+    std::optional<NetworkInterface> selected;
+    int best_prefix = -1;
+    unsigned long best_metric = std::numeric_limits<unsigned long>::max();
+    std::string line;
+    while (std::getline(routes, line)) {
+        std::istringstream row(line);
+        std::string name;
+        unsigned long network, gateway, flags, refs, uses, metric, mask;
+        if (!(row >> name >> std::hex >> network >> gateway >> flags >>
+              std::dec >> refs >> uses >> metric >> std::hex >> mask)) continue;
+        if (!(flags & 1) || (flags & 0x200) ||
+            (address.s_addr & mask) != network) continue;
+        const auto interface = std::find_if(interfaces.begin(), interfaces.end(),
+            [&](const auto& item) {
+                return item.name == name && item.is_up && item.is_physical && item.has_mac;
+            });
+        if (interface == interfaces.end()) continue;
+        const int prefix = std::popcount(static_cast<uint32_t>(mask));
+        if (prefix > best_prefix || (prefix == best_prefix && metric < best_metric)) {
+            selected = *interface;
+            best_prefix = prefix;
+            best_metric = metric;
+        }
+    }
+    return selected;
+}
+#endif
+
+std::optional<NetworkInterface> selectNetworkInterface(
+    const NetworkAddress& server, const std::string& bind_ip) {
+    const auto interfaces = listNetworkInterfaces();
+    if (!bind_ip.empty() && bind_ip != "0.0.0.0") {
+        for (const auto& item : interfaces) {
+            if (item.is_up && item.ipv4 == bind_ip) return item;
+        }
+        return std::nullopt;
+    }
+    if (server.ip.rfind("127.", 0) == 0) {
+        for (const auto& item : interfaces) {
+            if (item.is_up && item.is_loopback) return item;
+        }
+        return std::nullopt;
+    }
+#ifdef __linux__
+    // Main-table physical routes avoid choosing a TUN policy route merely
+    // because a VPN exists. Actual server availability is tested by login.
+    std::ifstream routes("/proc/net/route");
+    return selectInterfaceForRoutes(interfaces, server.ip, routes);
+#else
+    UdpSocket probe;
+    if (!probe.connect(server)) {
+        const auto source = probe.localAddress();
+        for (const auto& item : interfaces) {
+            if (source && item.ipv4 == *source && item.is_up &&
+                item.is_physical && item.has_mac) return item;
+        }
+    }
+    // With a virtual route, use a physical adapter only if unambiguous.
+    std::optional<NetworkInterface> selected;
+    for (const auto& item : interfaces) {
+        if (!item.is_up || !item.is_physical || !item.has_mac) continue;
+        if (selected) return std::nullopt;
+        selected = item;
+    }
+    return selected;
+#endif
 }
 
 NetworkInitializer::NetworkInitializer() {

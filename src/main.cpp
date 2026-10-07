@@ -6,9 +6,7 @@
 #include <memory>
 #include <optional>
 #include <array>
-#include <string_view>
 #include <thread>
-#include <vector>
 
 #include "drcom/drcom.h"
 
@@ -138,16 +136,51 @@ std::unique_ptr<drcom::DrcomClient> createClient(drcom::Logger& logger) {
     return client;
 }
 
-bool runConnectedLoop(drcom::Logger& logger) {
+struct RouteInfo {
+    std::string source;
+    std::string interface_name;
+    std::array<uint8_t, 6> mac{};
+    bool has_mac{false};
+
+    bool operator==(const RouteInfo&) const = default;
+};
+
+std::optional<RouteInfo> routeSource(const drcom::Config& config,
+                                    const std::string& requested_bind) {
+    const auto& server = config.getServerConfig();
+    const auto interface = drcom::selectNetworkInterface(
+        {server.ip, server.port}, requested_bind);
+    if (!interface) return std::nullopt;
+    drcom::UdpSocket probe;
+    if (probe.bind({interface->ipv4, 0}) ||
+        probe.connect({server.ip, server.port})) return std::nullopt;
+    return RouteInfo{interface->ipv4, interface->name, interface->mac,
+                     interface->has_mac};
+}
+
+enum class ConnectedLoopResult { Shutdown, Disconnected, NetworkChanged };
+
+ConnectedLoopResult runConnectedLoop(drcom::Logger& logger, const drcom::Config& config,
+                      const std::string& requested_bind,
+                      const std::optional<RouteInfo>& source) {
     auto next_statistics_log =
         std::chrono::steady_clock::now() + kStatisticsInterval;
 
+    auto next_network_check = std::chrono::steady_clock::now() + kNetworkPollInterval;
     while (!shutdownRequested() && g_client && g_client->isConnected()) {
         if (!waitInterruptibly(kLoopPollInterval)) {
-            return false;
+            return ConnectedLoopResult::Shutdown;
         }
 
         const auto now = std::chrono::steady_clock::now();
+        if (now >= next_network_check) {
+            next_network_check = now + kNetworkPollInterval;
+            if (routeSource(config, requested_bind) != source) {
+                logger.info("Network interface changed; reconnecting");
+                g_client->disconnect();
+                return ConnectedLoopResult::NetworkChanged;
+            }
+        }
         if (now < next_statistics_log) {
             continue;
         }
@@ -158,81 +191,14 @@ bool runConnectedLoop(drcom::Logger& logger) {
         } while (next_statistics_log <= now);
     }
 
-    return !shutdownRequested();
-}
-
-struct RouteInfo {
-    std::string source;
-    std::string interface_name;
-
-    bool operator==(const RouteInfo& other) const {
-        return source == other.source && interface_name == other.interface_name;
-    }
-};
-
-bool isUsableInterface(const drcom::NetworkInterface& interface,
-                       bool allow_loopback) {
-    if (!interface.is_up || interface.ipv4.empty()) {
-        return false;
-    }
-    if (interface.is_loopback) {
-        return allow_loopback;
-    }
-    if (!interface.has_mac) {
-        return false;
-    }
-
-    const auto& name = interface.name;
-    constexpr std::array<std::string_view, 10> virtual_prefixes = {
-        "Meta", "tailscale", "tun", "tap", "wg", "docker", "br-",
-        "virbr", "veth", "podman"};
-    return std::none_of(virtual_prefixes.begin(), virtual_prefixes.end(),
-                        [&name](std::string_view prefix) {
-                            return name.rfind(prefix, 0) == 0;
-                        });
-}
-
-std::optional<RouteInfo> routeSource(drcom::Config& config) {
-    const auto& server = config.getServerConfig();
-    const bool local_server = server.ip.rfind("127.", 0) == 0;
-    for (const auto& interface : drcom::listNetworkInterfaces()) {
-        if (!isUsableInterface(interface, local_server)) {
-            continue;
-        }
-
-        // Binding the probe to the interface address makes Linux select the
-        // physical route instead of a transparent proxy/TUN policy route.
-        drcom::UdpSocket probe;
-        if (probe.bind({interface.ipv4, 0})) {
-            continue;
-        }
-        if (probe.connect({server.ip, server.port})) {
-            continue;
-        }
-        const auto source = probe.localAddress();
-        if (!source || *source != interface.ipv4) {
-            continue;
-        }
-
-        auto user_config = config.getUserConfig();
-        user_config.ip = *source;
-        if (interface.has_mac) {
-            user_config.mac = interface.mac;
-        }
-        config.setUserConfig(user_config);
-
-        auto client_config = config.getClientConfig();
-        client_config.ip = *source;
-        config.setClientConfig(client_config);
-        return RouteInfo{*source, interface.name};
-    }
-
-    return std::nullopt;
+    return shutdownRequested() ? ConnectedLoopResult::Shutdown
+                               : ConnectedLoopResult::Disconnected;
 }
 
 // Polling the route keeps this portable and also catches a changed Wi-Fi or
 // Ethernet address while the client is sleeping after a failed handshake.
-bool waitForNetworkChange(drcom::Config& config,
+bool waitForNetworkChange(const drcom::Config& config,
+                          const std::string& requested_bind,
                           const std::optional<RouteInfo>& source,
                           std::chrono::seconds delay) {
     const auto deadline = std::chrono::steady_clock::now() + delay;
@@ -241,7 +207,7 @@ bool waitForNetworkChange(drcom::Config& config,
         const auto step = (std::min)(remaining,
             std::chrono::duration_cast<std::chrono::steady_clock::duration>(kNetworkPollInterval));
         if (!waitInterruptibly(std::chrono::duration_cast<std::chrono::milliseconds>(step))) break;
-        if (routeSource(config) != source) return true;
+        if (routeSource(config, requested_bind) != source) return true;
     }
     return false;
 }
@@ -259,11 +225,15 @@ int runClientSupervisor(drcom::Logger& logger, drcom::Config& config) {
     std::optional<drcom::DisconnectReason> previous_failure;
     unsigned failures = 0;
     bool waiting_for_route = false;
+    // Keep explicit user settings separate from the runtime binding.
+    const auto configured_client = config.getClientConfig();
+    const auto configured_user = config.getUserConfig();
+    const auto& requested_bind = configured_client.ip;
 
     while (!shutdownRequested()) {
-        const auto source = routeSource(config);
+        const auto source = routeSource(config, requested_bind);
         if (!source) {
-            if (!waiting_for_route) logger.info("No route to authentication server; waiting for network");
+            if (!waiting_for_route) logger.info("No usable network interface; waiting for network");
             waiting_for_route = true;
             previous_source.reset();
             previous_failure.reset();
@@ -273,25 +243,42 @@ int runClientSupervisor(drcom::Logger& logger, drcom::Config& config) {
         }
 
         if (waiting_for_route || source != previous_source) {
-            logger.info("Network route available via {} ({}); trying authentication",
+            logger.info("Using network interface {} ({}); trying authentication",
                         source->source, source->interface_name);
             failures = 0;
             previous_failure.reset();
         }
         waiting_for_route = false;
         previous_source = source;
+        auto runtime_client = configured_client;
+        runtime_client.ip = source->source;
+        config.setClientConfig(runtime_client);
+        auto runtime_user = configured_user;
+        if (configured_client.auto_identity) {
+            runtime_user.ip = source->source;
+            if (source->has_mac) runtime_user.mac = source->mac;
+        }
+        config.setUserConfig(runtime_user);
         g_client = createClient(logger);
 
+        auto loop_result = ConnectedLoopResult::Disconnected;
         const bool connected = g_client->connect();
         if (connected) {
             logger.info("Connected successfully");
             failures = 0;
             previous_failure.reset();
-            if (!runConnectedLoop(logger)) break;
+            loop_result = runConnectedLoop(logger, config, requested_bind, source);
+            if (loop_result == ConnectedLoopResult::Shutdown) break;
         }
 
         const auto reason = g_client->getLastDisconnectReason();
         const auto message = g_client->getLastDisconnectMessage();
+        if (loop_result == ConnectedLoopResult::NetworkChanged) {
+            g_client.reset();
+            previous_source.reset();
+            if (!configured_client.auto_reconnect) return 0;
+            continue;
+        }
         const bool reconnect = config.getClientConfig().auto_reconnect &&
                                g_client->shouldReconnect();
         g_client.reset();
@@ -315,7 +302,7 @@ int runClientSupervisor(drcom::Logger& logger, drcom::Config& config) {
                          failures, messageOrDefault(message, "unknown error"), delay.count());
         }
         previous_failure = reason;
-        if (waitForNetworkChange(config, source, delay)) {
+        if (waitForNetworkChange(config, requested_bind, source, delay)) {
             previous_source.reset();
         }
     }

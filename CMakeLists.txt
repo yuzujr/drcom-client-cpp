@@ -32,3 +32,10 @@ if(WIN32)
     install(FILES ${CMAKE_SOURCE_DIR}/scripts/windows-autostart.ps1
             DESTINATION ${DRCOM_INSTALL_DIR}/bin)
 endif()
+
+include(CTest)
+if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(network_selection_tests tests/network_selection.cpp src/network.cpp)
+    target_include_directories(network_selection_tests PRIVATE src/include)
+    add_test(NAME network_selection COMMAND network_selection_tests)
+endif()
