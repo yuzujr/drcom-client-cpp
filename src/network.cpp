@@ -7,6 +7,10 @@
 #include <fstream>
 #include <limits>
 #include <sstream>
+#include <chrono>
+#ifndef _WIN32
+#include <poll.h>
+#endif
 
 #ifdef _WIN32
 #include <iphlpapi.h>
@@ -402,6 +406,42 @@ std::pair<size_t, std::error_code> UdpSocket::receive(std::vector<uint8_t>& buff
     
     buffer.resize(static_cast<size_t>(result));
     return {static_cast<size_t>(result), {}};
+}
+
+std::pair<size_t, std::error_code> UdpSocket::receiveInterruptibly(
+    std::vector<uint8_t>& buffer, int timeout_ms,
+    const std::function<bool()>& cancelled) {
+    buffer.clear();
+    if (!isValid()) return {0, std::make_error_code(std::errc::bad_file_descriptor)};
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+    for (;;) {
+        if (cancelled && cancelled())
+            return {0, std::make_error_code(std::errc::operation_canceled)};
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now()).count();
+        if (remaining <= 0) return {0, std::make_error_code(std::errc::timed_out)};
+        const auto wait_ms = static_cast<int>((std::min)(remaining, int64_t{100}));
+#ifdef _WIN32
+        fd_set readable;
+        FD_ZERO(&readable);
+        FD_SET(socket_, &readable);
+        timeval timeout{0, wait_ms * 1000};
+        const int ready = ::select(0, &readable, nullptr, nullptr, &timeout);
+#else
+        pollfd readable{socket_, POLLIN, 0};
+        const int ready = ::poll(&readable, 1, wait_ms);
+#endif
+        if (ready < 0) {
+            const auto error = getLastError();
+            if (error == std::errc::interrupted) continue;
+            return {0, error};
+        }
+        if (ready > 0) {
+            if (cancelled && cancelled())
+                return {0, std::make_error_code(std::errc::operation_canceled)};
+            return receive(buffer);
+        }
+    }
 }
 
 std::pair<size_t, std::error_code> UdpSocket::receiveFrom(std::vector<uint8_t>& buffer,

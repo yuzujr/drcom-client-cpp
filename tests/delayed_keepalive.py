@@ -44,7 +44,7 @@ auth_interval=2
 heartbeat_interval=2
 debug=true
 ''')
-        client = subprocess.Popen([sys.argv[1], '-c', str(config)], stdout=client_log, stderr=subprocess.STDOUT)
+        client = subprocess.Popen([sys.argv[1], '--state-dir', str(Path(directory) / 'state'), '-c', str(config)], stdout=client_log, stderr=subprocess.STDOUT)
         deadline = time.monotonic() + 18
         pending = []
         peer = None

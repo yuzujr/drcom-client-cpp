@@ -127,6 +127,12 @@ public:
     /**
      * @brief Set event callback for notifications
      */
+    // Set before connect(); invoked by authentication and keepalive waits.
+    void setCancellationCallback(std::function<bool()> callback) {
+        cancellation_callback_ = std::move(callback);
+    }
+    // Stop maintenance without logging out the server-side session.
+    void stop();
     void setEventCallback(ClientEventCallback callback) { event_callback_ = std::move(callback); }
     
     /**
@@ -151,6 +157,7 @@ public:
     void sendKeepalive();
     
 private:
+    std::function<bool()> cancellation_callback_;
     // Configuration and dependencies
     Config& config_;
     Logger& logger_;

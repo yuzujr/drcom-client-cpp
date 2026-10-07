@@ -2,6 +2,7 @@
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
+#include <chrono>
 
 std::string route(const std::string& name, const char* network,
                   const char* mask, unsigned metric, unsigned flags = 1) {
@@ -43,5 +44,22 @@ int main() {
     check(wifi + wired, "wifi");
     interfaces[0].has_mac = false;
     check(wifi + wired, "");
-    std::cout << "10 route selection cases passed\n";
+    auto& manager = drcom::NetworkManager::getInstance();
+    if (!manager.isInitialized()) throw std::runtime_error("Network init failed");
+    drcom::UdpSocket socket;
+    if (socket.bind({"127.0.0.1", 0})) throw std::runtime_error("Bind failed");
+    std::vector<uint8_t> buffer;
+    auto start = std::chrono::steady_clock::now();
+    const auto [size, error] = socket.receiveInterruptibly(buffer, 15000, [&] {
+        return std::chrono::steady_clock::now() - start >= std::chrono::milliseconds(50);
+    });
+    if (error != std::errc::operation_canceled || size != 0 ||
+        std::chrono::steady_clock::now() - start > std::chrono::seconds(1))
+        throw std::runtime_error("Receive was not promptly cancelled");
+    start = std::chrono::steady_clock::now();
+    const auto timeout = socket.receiveInterruptibly(buffer, 250, {});
+    if (timeout.second != std::errc::timed_out ||
+        std::chrono::steady_clock::now() - start < std::chrono::milliseconds(200))
+        throw std::runtime_error("Receive deadline changed");
+    std::cout << "10 route selection cases, cancellation and deadline passed\n";
 }

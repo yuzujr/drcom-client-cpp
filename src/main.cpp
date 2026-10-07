@@ -7,8 +7,12 @@
 #include <optional>
 #include <array>
 #include <thread>
+#include <string_view>
+#include <vector>
+#include <cstdio>
 
 #include "drcom/drcom.h"
+#include "drcom/runtime_control.h"
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -34,6 +38,7 @@ constexpr auto kMaximumRetryDelay = std::chrono::seconds(60);
 
 // Global client instance for signal handling
 std::atomic<bool> g_shutdown_requested{false};
+std::unique_ptr<drcom::RuntimeControl> g_control;
 std::unique_ptr<drcom::DrcomClient> g_client;
 
 bool shutdownRequested() {
@@ -50,9 +55,10 @@ void signalHandler(int) {
 }
 
 void printUsage(const char* program_name) {
-    std::cout << "Usage: " << program_name << " [options]\n"
+    std::cout << "Usage: " << program_name << " [enable|disable|status] [options]\n"
               << "Options:\n"
               << "  -c, --config <file>    Configuration file path\n"
+              << "  --state-dir <dir>      Shared persistent control directory\n"
               << "  -h, --help            Show this help message\n"
               << "  -v, --version         Show version information\n"
               << std::endl;
@@ -158,7 +164,7 @@ std::optional<RouteInfo> routeSource(const drcom::Config& config,
                      network_interface->has_mac};
 }
 
-enum class ConnectedLoopResult { Shutdown, Disconnected, NetworkChanged };
+enum class ConnectedLoopResult { Shutdown, Disconnected, NetworkChanged, Paused };
 
 ConnectedLoopResult runConnectedLoop(drcom::Logger& logger, const drcom::Config& config,
                       const std::string& requested_bind,
@@ -172,6 +178,10 @@ ConnectedLoopResult runConnectedLoop(drcom::Logger& logger, const drcom::Config&
             return ConnectedLoopResult::Shutdown;
         }
 
+        if (!g_control->enabled()) {
+            g_client->stop();
+            return ConnectedLoopResult::Paused;
+        }
         const auto now = std::chrono::steady_clock::now();
         if (now >= next_network_check) {
             next_network_check = now + kNetworkPollInterval;
@@ -207,7 +217,7 @@ bool waitForNetworkChange(const drcom::Config& config,
         const auto step = (std::min)(remaining,
             std::chrono::duration_cast<std::chrono::steady_clock::duration>(kNetworkPollInterval));
         if (!waitInterruptibly(std::chrono::duration_cast<std::chrono::milliseconds>(step))) break;
-        if (routeSource(config, requested_bind) != source) return true;
+        if (!g_control->enabled() || routeSource(config, requested_bind) != source) return true;
     }
     return false;
 }
@@ -225,12 +235,25 @@ int runClientSupervisor(drcom::Logger& logger, drcom::Config& config) {
     std::optional<drcom::DisconnectReason> previous_failure;
     unsigned failures = 0;
     bool waiting_for_route = false;
+    bool paused = false;
     // Keep explicit user settings separate from the runtime binding.
     const auto configured_client = config.getClientConfig();
     const auto configured_user = config.getUserConfig();
     const auto& requested_bind = configured_client.ip;
 
     while (!shutdownRequested()) {
+        if (!g_control->enabled()) {
+            if (g_client) { g_client->stop(); g_client.reset(); }
+            if (!paused) logger.info("Automatic authentication disabled; waiting for enable");
+            paused = true;
+            previous_source.reset();
+            previous_failure.reset();
+            failures = 0;
+            waitInterruptibly(kLoopPollInterval);
+            continue;
+        }
+        if (paused) logger.info("Automatic authentication enabled");
+        paused = false;
         const auto source = routeSource(config, requested_bind);
         if (!source) {
             if (!waiting_for_route) logger.info("No usable network interface; waiting for network");
@@ -260,6 +283,20 @@ int runClientSupervisor(drcom::Logger& logger, drcom::Config& config) {
         }
         config.setUserConfig(runtime_user);
         g_client = createClient(logger);
+        g_client->setCancellationCallback(
+            [&config, requested_bind, source,
+             next_check = std::chrono::steady_clock::now()]() mutable {
+                if (shutdownRequested()) return true;
+                try {
+                    if (!g_control->enabled()) return true;
+                    const auto now = std::chrono::steady_clock::now();
+                    if (now >= next_check) {
+                        next_check = now + kNetworkPollInterval;
+                        if (routeSource(config, requested_bind) != source) return true;
+                    }
+                } catch (...) { return true; }
+                return false;
+            });
 
         auto loop_result = ConnectedLoopResult::Disconnected;
         const bool connected = g_client->connect();
@@ -271,6 +308,19 @@ int runClientSupervisor(drcom::Logger& logger, drcom::Config& config) {
             if (loop_result == ConnectedLoopResult::Shutdown) break;
         }
 
+        if (shutdownRequested()) break;
+        if (!g_control->enabled() || loop_result == ConnectedLoopResult::Paused) {
+            g_client->stop();
+            g_client.reset();
+            continue;
+        }
+        if (routeSource(config, requested_bind) != source) {
+            g_client->stop();
+            g_client.reset();
+            previous_source.reset();
+            if (!configured_client.auto_reconnect) return 0;
+            continue;
+        }
         const auto reason = g_client->getLastDisconnectReason();
         const auto message = g_client->getLastDisconnectMessage();
         if (loop_result == ConnectedLoopResult::NetworkChanged) {
@@ -321,11 +371,20 @@ void shutdownClient(drcom::Logger& logger) {
 
 int main(int argc, char* argv[]) {
     std::string config_file = "drcom.conf";
+    std::string state_directory;
+    std::string command;
 
     // Parse command line arguments
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-        if (arg == "-h" || arg == "--help") {
+        if (arg == "enable" || arg == "disable" || arg == "status") {
+            if (!command.empty()) return printArgumentError(argv[0], "Only one command is allowed");
+            command = arg;
+        } else if (arg == "--state-dir") {
+            if (i + 1 >= argc) return printArgumentError(argv[0], "Missing state directory");
+            state_directory = argv[++i];
+            if (state_directory.empty()) return printArgumentError(argv[0], "Empty state directory");
+        } else if (arg == "-h" || arg == "--help") {
             printUsage(argv[0]);
             return 0;
         } else if (arg == "-v" || arg == "--version") {
@@ -354,10 +413,18 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    std::cout << "DRCOM Client (C++)" << std::endl;
-    std::cout << "=============================" << std::endl;
-
     try {
+        g_control = std::make_unique<drcom::RuntimeControl>(state_directory);
+        if (!command.empty()) {
+            if (command != "status") g_control->setEnabled(command == "enable");
+            std::cout << "Automatic authentication: "
+                      << (g_control->enabled() ? "enabled" : "disabled") << '\n'
+                      << "State directory: " << g_control->directory().string() << '\n';
+            if (command != "status")
+                std::cout << "A running client using this directory will apply the change.\n";
+            return 0;
+        }
+        std::cout << "DRCOM Client (C++)\n=============================\n";
         // Initialize logging
         auto& logger = drcom::Logger::getInstance();
         logger.addSink(std::make_unique<drcom::ConsoleSink>());
@@ -397,6 +464,8 @@ int main(int argc, char* argv[]) {
         return exit_code;
 
     } catch (const std::exception& e) {
+        g_shutdown_requested.store(true, std::memory_order_relaxed);
+        if (g_client) { g_client->stop(); g_client.reset(); }
         std::cerr << "Error: " << e.what() << std::endl;
         auto& logger = drcom::Logger::getInstance();
         logger.error("Unhandled exception: {}", e.what());
@@ -429,6 +498,23 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         argv.push_back(s.data());
     }
 
+    // Keep scheduled background runs windowless, but expose CLI command output.
+    const bool cli_output = std::any_of(argv.begin() + 1, argv.end(), [](const char* value) {
+        const std::string_view arg(value);
+        return arg == "enable" || arg == "disable" || arg == "status" ||
+               arg == "--help" || arg == "-h" || arg == "--version" || arg == "-v";
+    });
+    if (cli_output) {
+        const auto output_handle = GetStdHandle(STD_OUTPUT_HANDLE);
+        const auto error_handle = GetStdHandle(STD_ERROR_HANDLE);
+        if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+            FILE* reopened = nullptr;
+            if (!output_handle || output_handle == INVALID_HANDLE_VALUE)
+                freopen_s(&reopened, "CONOUT$", "w", stdout);
+            if (!error_handle || error_handle == INVALID_HANDLE_VALUE)
+                freopen_s(&reopened, "CONOUT$", "w", stderr);
+        }
+    }
     return main(argc, argv.data());
 }
 #endif

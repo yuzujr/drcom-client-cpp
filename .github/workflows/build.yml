@@ -193,6 +193,7 @@ jobs:
     - name: Run integration test
       run: |
         python3 tests/delayed_keepalive.py "$DRCOM_CLIENT" "$MOCK_SERVER"
+        python3 tests/runtime_control.py "$DRCOM_CLIENT" "$MOCK_SERVER"
 
   create-release:
     runs-on: ubuntu-latest

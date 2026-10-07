@@ -205,6 +205,13 @@ bool DrcomClient::connect() {
     }
 }
 
+void DrcomClient::stop() {
+    stopAllThreads();
+    socket_->close();
+    clearDisconnectStatus();
+    setState(ClientState::DISCONNECTED);
+}
+
 bool DrcomClient::disconnect() {
     if (!isConnected()) {
         return true;
@@ -216,6 +223,8 @@ bool DrcomClient::disconnect() {
         // Stop keep-alive threads
         stopAllThreads();
         
+        // Cancellation is for ongoing authentication, not explicit logout.
+        cancellation_callback_ = {};
         // Perform logout sequence
         if (!performChallenge(false, kDisconnectTimeoutMs)) {
             logger_.warn("Logout challenge failed");
@@ -970,6 +979,10 @@ bool DrcomClient::sendAndReceive(const std::vector<uint8_t>& send_data,
 
     std::lock_guard<std::mutex> io_lock(socket_io_mutex_);
     
+    if (cancellation_callback_ && cancellation_callback_()) {
+        if (error_message) *error_message = "Operation cancelled";
+        return false;
+    }
     // Set timeout
     auto timeout_error = socket_->setTimeout(timeout_ms);
     if (timeout_error) {
@@ -997,7 +1010,7 @@ bool DrcomClient::sendAndReceive(const std::vector<uint8_t>& send_data,
     }
     
     // Receive response
-    auto [received, recv_error] = socket_->receive(receive_data);
+    auto [received, recv_error] = socket_->receiveInterruptibly(receive_data, timeout_ms, cancellation_callback_);
     if (recv_error) {
         logger_.debug("Receive failed: {}", recv_error.message());
         if (error_message) {

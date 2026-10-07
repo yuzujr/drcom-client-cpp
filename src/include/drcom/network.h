@@ -8,6 +8,7 @@
 #include <optional>
 #include <array>
 #include <istream>
+#include <functional>
 
 #ifdef _WIN32
     #include <winsock2.h>
@@ -120,6 +121,11 @@ public:
     std::pair<size_t, std::error_code> receive(std::vector<uint8_t>& buffer, 
                                               size_t max_size = 1024);
     
+    // Wait for one datagram, checking cancellation at most every 100 ms.
+    std::pair<size_t, std::error_code> receiveInterruptibly(
+        std::vector<uint8_t>& buffer, int timeout_ms,
+        const std::function<bool()>& cancelled);
+
     /**
      * @brief Receive data from any address
      * @param buffer Buffer to receive data into
