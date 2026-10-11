@@ -40,6 +40,42 @@ constexpr auto kMaximumRetryDelay = std::chrono::seconds(60);
 std::atomic<bool> g_shutdown_requested{false};
 std::unique_ptr<drcom::RuntimeControl> g_control;
 std::unique_ptr<drcom::DrcomClient> g_client;
+drcom::RuntimeStatus g_runtime;
+
+int64_t epochSeconds() {
+    return std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+void publishState(std::string state, int64_t next_retry = 0) {
+    g_runtime.state = std::move(state);
+    g_runtime.next_retry = next_retry;
+    g_control->publish(g_runtime);
+}
+
+void printRuntimeStatus() {
+    const auto status = g_control->readStatus();
+    if (!status) {
+        std::cout << "Runtime: unknown (no runtime status; client may be stopped or older)\n";
+        return;
+    }
+    std::cout << "Runtime: " << (status->running ? "running" : "not running")
+              << " (PID " << status->pid << ")\n";
+    if (status->running && status->fresh) {
+        std::cout << "State: " << status->state << '\n';
+    } else {
+        std::cout << "State: unknown (" << (status->running ? "stale status" : "process exited")
+                  << ")\nLast recorded state: " << status->state << '\n';
+    }
+    if (!status->interface_name.empty())
+        std::cout << "Interface: " << status->interface_name << " (" << status->ip << ")\n";
+    std::cout << "Authentication attempts: " << status->attempts << '\n';
+    if (!status->last_failure.empty())
+        std::cout << "Last failure: " << status->last_failure << '\n';
+    if (status->running && status->fresh && status->next_retry)
+        std::cout << "Next retry: in " << (std::max)(int64_t{0}, status->next_retry - epochSeconds())
+                  << "s\n";
+}
 
 bool shutdownRequested() {
     return g_shutdown_requested.load(std::memory_order_relaxed);
@@ -100,6 +136,7 @@ bool waitInterruptibly(std::chrono::milliseconds delay) {
            remaining > std::chrono::milliseconds::zero()) {
         const auto sleep_duration = (std::min)(remaining, kLoopPollInterval);
         std::this_thread::sleep_for(sleep_duration);
+        g_control->refresh();
         remaining -= sleep_duration;
     }
 
@@ -236,6 +273,7 @@ int runClientSupervisor(drcom::Logger& logger, drcom::Config& config) {
     unsigned failures = 0;
     bool waiting_for_route = false;
     bool paused = false;
+    auto last_retry_report = std::chrono::steady_clock::now();
     // Keep explicit user settings separate from the runtime binding.
     const auto configured_client = config.getClientConfig();
     const auto configured_user = config.getUserConfig();
@@ -244,7 +282,10 @@ int runClientSupervisor(drcom::Logger& logger, drcom::Config& config) {
     while (!shutdownRequested()) {
         if (!g_control->enabled()) {
             if (g_client) { g_client->stop(); g_client.reset(); }
-            if (!paused) logger.info("Automatic authentication disabled; waiting for enable");
+            if (!paused) {
+                logger.info("Automatic authentication disabled; waiting for enable");
+                publishState("disabled");
+            }
             paused = true;
             previous_source.reset();
             previous_failure.reset();
@@ -256,7 +297,12 @@ int runClientSupervisor(drcom::Logger& logger, drcom::Config& config) {
         paused = false;
         const auto source = routeSource(config, requested_bind);
         if (!source) {
-            if (!waiting_for_route) logger.info("No usable network interface; waiting for network");
+            if (g_runtime.state != "waiting for network") {
+                logger.info("No usable network interface; waiting for network");
+                g_runtime.interface_name.clear();
+                g_runtime.ip.clear();
+                publishState("waiting for network");
+            }
             waiting_for_route = true;
             previous_source.reset();
             previous_failure.reset();
@@ -282,6 +328,10 @@ int runClientSupervisor(drcom::Logger& logger, drcom::Config& config) {
             if (source->has_mac) runtime_user.mac = source->mac;
         }
         config.setUserConfig(runtime_user);
+        g_runtime.interface_name = source->interface_name;
+        g_runtime.ip = source->source;
+        ++g_runtime.attempts;
+        publishState("authenticating");
         g_client = createClient(logger);
         g_client->setCancellationCallback(
             [&config, requested_bind, source,
@@ -292,6 +342,7 @@ int runClientSupervisor(drcom::Logger& logger, drcom::Config& config) {
                     const auto now = std::chrono::steady_clock::now();
                     if (now >= next_check) {
                         next_check = now + kNetworkPollInterval;
+                        g_control->refresh();
                         if (routeSource(config, requested_bind) != source) return true;
                     }
                 } catch (...) { return true; }
@@ -302,6 +353,7 @@ int runClientSupervisor(drcom::Logger& logger, drcom::Config& config) {
         const bool connected = g_client->connect();
         if (connected) {
             logger.info("Connected successfully");
+            publishState("authenticated");
             failures = 0;
             previous_failure.reset();
             loop_result = runConnectedLoop(logger, config, requested_bind, source);
@@ -334,6 +386,8 @@ int runClientSupervisor(drcom::Logger& logger, drcom::Config& config) {
         g_client.reset();
 
         if (!reconnect) {
+            g_runtime.last_failure = messageOrDefault(message, "unknown error");
+            publishState("error");
             logger.error("Authentication stopped: {} ({})",
                          messageOrDefault(message, "unknown error"),
                          drcom::disconnectReasonToString(reason));
@@ -342,11 +396,19 @@ int runClientSupervisor(drcom::Logger& logger, drcom::Config& config) {
 
         ++failures;
         const auto delay = retryDelay(config, failures);
+        g_runtime.last_failure = messageOrDefault(message, "unknown error");
+        publishState("waiting to retry", epochSeconds() + delay.count());
         if (!previous_failure || *previous_failure != reason) {
-            logger.warn("Authentication unavailable: {} ({}); retrying with backoff (up to {}s)",
+            logger.warn("Authentication unavailable: {} ({}); next attempt in {}s (backoff up to {}s)",
                         messageOrDefault(message, "unknown error"),
                         drcom::disconnectReasonToString(reason),
+                        delay.count(),
                         kMaximumRetryDelay.count());
+            last_retry_report = std::chrono::steady_clock::now();
+        } else if (std::chrono::steady_clock::now() - last_retry_report >= std::chrono::minutes(5)) {
+            logger.info("Still retrying authentication: {} attempts; next attempt in {}s; last failure: {}",
+                        g_runtime.attempts, delay.count(), message);
+            last_retry_report = std::chrono::steady_clock::now();
         } else {
             logger.debug("Authentication retry {} failed: {}; next attempt in {}s",
                          failures, messageOrDefault(message, "unknown error"), delay.count());
@@ -420,6 +482,7 @@ int main(int argc, char* argv[]) {
             std::cout << "Automatic authentication: "
                       << (g_control->enabled() ? "enabled" : "disabled") << '\n'
                       << "State directory: " << g_control->directory().string() << '\n';
+            if (command == "status") printRuntimeStatus();
             if (command != "status")
                 std::cout << "A running client using this directory will apply the change.\n";
             return 0;
@@ -434,15 +497,21 @@ int main(int argc, char* argv[]) {
         logger.setLevel(drcom::LogLevel::INFO);
 
         logger.info("Starting DRCOM client...");
+        g_control->claim();
+        publishState("starting");
 
         // Load configuration
         auto& config = drcom::Config::getInstance();
         if (!config.loadFromFile(config_file)) {
+            g_runtime.last_failure = "Could not load configuration file";
+            publishState("error");
             logger.error("Could not load config file '{}'", config_file);
             return 1;
         }
 
         if (!config.validate()) {
+            g_runtime.last_failure = "Configuration validation failed";
+            publishState("error");
             logger.error("Configuration validation failed");
             return 1;
         }
@@ -459,6 +528,7 @@ int main(int argc, char* argv[]) {
 
         const int exit_code = runClientSupervisor(logger, config);
         shutdownClient(logger);
+        if (g_runtime.state != "error") publishState("stopped");
 
         logger.info("Client shut down successfully");
         return exit_code;
@@ -466,6 +536,8 @@ int main(int argc, char* argv[]) {
     } catch (const std::exception& e) {
         g_shutdown_requested.store(true, std::memory_order_relaxed);
         if (g_client) { g_client->stop(); g_client.reset(); }
+        g_runtime.last_failure = e.what();
+        try { publishState("error"); } catch (...) {}
         std::cerr << "Error: " << e.what() << std::endl;
         auto& logger = drcom::Logger::getInstance();
         logger.error("Unhandled exception: {}", e.what());
