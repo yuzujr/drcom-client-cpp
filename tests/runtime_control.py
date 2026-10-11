@@ -35,6 +35,11 @@ with tempfile.TemporaryDirectory() as directory:
     def command(name):
         return subprocess.check_output([client_exe, name, '--state-dir', str(state)], text=True)
 
+    def wait_state(expected, timeout=2):
+        # Log output and the status file are separate channels. Wait for the
+        # state being tested, without assuming when a log line becomes visible.
+        wait_for(lambda: f'State: {expected}' in command('status').splitlines(), timeout)
+
     def launch(port):
         reserved = udp()
         client_port = reserved.getsockname()[1]
@@ -66,7 +71,7 @@ heartbeat_interval=2
             assert 'State: authenticating' in command('status')
             start = time.monotonic()
             command('disable')
-            wait_for(lambda: 'disabled; waiting' in log.read_text(), 1)
+            wait_state('disabled', 1)
             assert time.monotonic() - start < 1
             assert process.poll() is None
             assert 'disabled' in command('status')
@@ -82,7 +87,7 @@ heartbeat_interval=2
             assert 'Runtime: not running' in command('status')
             command('disable')
             process, log = launch(silent.getsockname()[1])
-            wait_for(lambda: 'disabled; waiting' in log.read_text())
+            wait_state('disabled')
             assert not select.select([silent], [], [], 0.4)[0], 'Lost disabled state on restart'
             process.terminate()
             assert process.wait(timeout=1) == 0
@@ -96,7 +101,7 @@ heartbeat_interval=2
         processes.append(server)
         wait_for(lambda: 'listening' in server_log.read_text())
         process, log = launch(port)
-        wait_for(lambda: 'Connected successfully' in log.read_text())
+        wait_state('authenticated')
         assert 'State: authenticated' in command('status')
         # A second publisher must not overwrite the live daemon's status.
         duplicate = subprocess.run([client_exe, '-c', str(root / 'test.conf'), '--state-dir', str(state)],
@@ -104,7 +109,7 @@ heartbeat_interval=2
         assert duplicate.returncode == 1 and 'runtime lock' in duplicate.stdout
         assert 'State: authenticated' in command('status')
         command('disable')
-        wait_for(lambda: 'disabled; waiting' in log.read_text())
+        wait_state('disabled')
         time.sleep(0.2)
         previous = server_log.read_text()
         time.sleep(1)
@@ -112,9 +117,17 @@ heartbeat_interval=2
         assert 'Client logged out' not in previous, 'Disable sent logout'
         assert process.poll() is None
         command('enable')
+        wait_state('authenticated')
         wait_for(lambda: log.read_text().count('Connected successfully') == 2)
         command('disable')
-        wait_for(lambda: log.read_text().count('disabled; waiting') == 2)
+        wait_state('disabled')
+        # Exercise rapid transitions repeatedly: a visible log line must not
+        # serve as an acknowledgement for a different status channel.
+        for _ in range(10):
+            command('enable')
+            wait_state('authenticated')
+            command('disable')
+            wait_state('disabled')
         process.terminate()
         assert process.wait(timeout=1) == 0
         assert 'Client logged out' not in server_log.read_text()
@@ -129,14 +142,14 @@ heartbeat_interval=2
             silent.recvfrom(4096)
             time.sleep(7)
             assert 'State: authenticating' in command('status'), 'Status expired during receive'
-            wait_for(lambda: 'State: waiting to retry' in command('status'), 10)
+            wait_state('waiting to retry', 10)
             status = command('status')
             assert 'Authentication attempts: 1' in status and 'Next retry:' in status
             assert 'Connection timed out' in status
         with (root / 'retry-server.log').open('w') as output:
             retry_server = subprocess.Popen([server_exe, str(retry_port)], stdout=output, stderr=subprocess.STDOUT)
         processes.append(retry_server)
-        wait_for(lambda: 'Connected successfully' in retry_log.read_text(), 6)
+        wait_state('authenticated', 6)
         assert 'Authentication attempts: 2' in command('status')
         assert 'State: authenticated' in command('status')
         retry_client.kill()

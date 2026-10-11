@@ -283,8 +283,8 @@ int runClientSupervisor(drcom::Logger& logger, drcom::Config& config) {
         if (!g_control->enabled()) {
             if (g_client) { g_client->stop(); g_client.reset(); }
             if (!paused) {
-                logger.info("Automatic authentication disabled; waiting for enable");
                 publishState("disabled");
+                logger.info("Automatic authentication disabled; waiting for enable");
             }
             paused = true;
             previous_source.reset();
@@ -298,10 +298,10 @@ int runClientSupervisor(drcom::Logger& logger, drcom::Config& config) {
         const auto source = routeSource(config, requested_bind);
         if (!source) {
             if (g_runtime.state != "waiting for network") {
-                logger.info("No usable network interface; waiting for network");
                 g_runtime.interface_name.clear();
                 g_runtime.ip.clear();
                 publishState("waiting for network");
+                logger.info("No usable network interface; waiting for network");
             }
             waiting_for_route = true;
             previous_source.reset();
@@ -352,8 +352,8 @@ int runClientSupervisor(drcom::Logger& logger, drcom::Config& config) {
         auto loop_result = ConnectedLoopResult::Disconnected;
         const bool connected = g_client->connect();
         if (connected) {
-            logger.info("Connected successfully");
             publishState("authenticated");
+            logger.info("Connected successfully");
             failures = 0;
             previous_failure.reset();
             loop_result = runConnectedLoop(logger, config, requested_bind, source);
