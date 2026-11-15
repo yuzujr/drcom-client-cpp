@@ -335,18 +335,8 @@ private:
     }
     
     void printPacket(const uint8_t* data, size_t len) {
-        std::cout << "Packet data: ";
-        for (size_t i = 0; i < len && i < 32; i++) {
-#ifdef _WIN32
-            printf("%02x ", (unsigned char)data[i]);
-#else
-            printf("%02x ", data[i]);
-#endif
-        }
-        if (len > 32) {
-            std::cout << "...";
-        }
-        std::cout << std::endl;
+        if (len) std::cout << "Packet type: 0x" << std::hex << unsigned(data[0])
+                           << std::dec << " (" << len << " bytes)" << std::endl;
     }
 };
 

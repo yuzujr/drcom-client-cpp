@@ -42,7 +42,11 @@ def main():
         client = stage / 'bin' / f'drcom_client{extension}'
         server = stage / 'bin' / f'mock_drcom_server{extension}'
         for file in [client, server, stage / 'share/drcom-client-cpp/config/drcom_jlu.conf',
-                     stage / 'share/drcom-client-cpp/config/drcom_test.conf']:
+                     stage / 'share/drcom-client-cpp/config/drcom_test.conf',
+                     stage / 'share/doc/drcom-client-cpp/README.md',
+                     stage / 'share/doc/drcom-client-cpp/LICENSE',
+                     stage / 'share/doc/drcom-client-cpp/docs/testing.md',
+                     stage / 'share/doc/drcom-client-cpp/docs/troubleshooting.md']:
             if not file.is_file():
                 raise RuntimeError(f'Installed package is missing {file.relative_to(stage)}')
         if os.name == 'nt' and not (stage / 'bin/windows-autostart.ps1').is_file():

@@ -119,7 +119,6 @@ void logConfiguration(drcom::Logger& logger, const drcom::Config& config) {
     logger.info("Auto reconnect: {} ({}s)",
                 config.getClientConfig().auto_reconnect ? "enabled" : "disabled",
                 config.getClientConfig().reconnect_interval);
-    logger.info("Username: {}", config.getUserConfig().username);
 }
 
 void logStatistics(drcom::Logger& logger,

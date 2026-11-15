@@ -17,6 +17,9 @@ CTest 的覆盖范围：
 
 | 测试 | 验证内容 | 平台 |
 | --- | --- | --- |
+| logging | 无法打开日志时的诊断、有限轮转 | 全平台 |
+| runtime_status | 重复快照去重、心跳刷新、即时状态、过期 | 全平台 |
+| runtime_soak | 反复认证/暂停，Linux 资源采样 | 全平台 |
 | configuration | 配置边界、私密诊断、失败不覆盖旧值、保存重载 | 全平台 |
 | protocol_oracle | Python 独立计算报文与 MD5/校验和 | 全平台 |
 | fault_recovery | 截断响应、丢包、旧包、拒绝认证、取消等待 | 全平台 |

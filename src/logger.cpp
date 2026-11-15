@@ -4,18 +4,31 @@
 #include <filesystem>
 #include <iomanip>
 #include <sstream>
+#include <stdexcept>
 
 namespace drcom {
+namespace {
+std::tm localTime(std::time_t value) {
+    std::tm result{};
+#ifdef _WIN32
+    localtime_s(&result, &value);
+#else
+    localtime_r(&value, &result);
+#endif
+    return result;
+}
+}
 
 void ConsoleSink::log(const LogEntry& entry) {
     // Format timestamp
     auto time_t = std::chrono::system_clock::to_time_t(entry.timestamp);
+    const auto local_time = localTime(time_t);
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         entry.timestamp.time_since_epoch()
     ) % 1000;
     
     std::stringstream ss;
-    ss << std::put_time(std::localtime(&time_t), "%Y-%m-%d %H:%M:%S");
+    ss << std::put_time(&local_time, "%Y-%m-%d %H:%M:%S");
     ss << '.' << std::setfill('0') << std::setw(3) << ms.count();
     
     // Format level
@@ -34,25 +47,24 @@ void ConsoleSink::log(const LogEntry& entry) {
 
 FileSink::FileSink(const std::string& filename) 
     : filename_(filename), file_(std::make_unique<std::ofstream>(filename, std::ios::app)) {
+    if (!file_->is_open()) throw std::runtime_error("Cannot open log file: " + filename_);
     rotateIfNeeded();
 }
 
 FileSink::~FileSink() = default;
 
 void FileSink::log(const LogEntry& entry) {
-    if (!file_ || !file_->is_open()) {
-        return;
-    }
-    
     std::lock_guard<std::mutex> lock(file_mutex_);
+    if (!file_ || !file_->is_open()) return;
     
     // Format timestamp
     auto time_t = std::chrono::system_clock::to_time_t(entry.timestamp);
+    const auto local_time = localTime(time_t);
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         entry.timestamp.time_since_epoch()
     ) % 1000;
     
-    *file_ << std::put_time(std::localtime(&time_t), "%Y-%m-%d %H:%M:%S");
+    *file_ << std::put_time(&local_time, "%Y-%m-%d %H:%M:%S");
     *file_ << '.' << std::setfill('0') << std::setw(3) << ms.count();
     
     // Format level
@@ -85,10 +97,8 @@ void FileSink::rotateIfNeeded() {
 }
 
 void FileSink::flush() {
-    if (file_) {
-        std::lock_guard<std::mutex> lock(file_mutex_);
-        file_->flush();
-    }
+    std::lock_guard<std::mutex> lock(file_mutex_);
+    if (file_) file_->flush();
 }
 
 Logger& Logger::getInstance() {
@@ -133,47 +143,49 @@ void Logger::logHexDump(LogLevel level, const std::string& prefix,
     log(level, oss.str());
 }
 
+void Logger::logPacket(const std::string& label, const std::vector<uint8_t>& data) {
+    if (data.empty()) debug("{} (0 bytes)", label);
+    else debug("{} ({} bytes, type 0x{:02x})", label, data.size(), data[0]);
+}
+
 void Logger::logChallengeSend(const std::vector<uint8_t>& data) {
-    logHexDump(LogLevel::DEBUG, "Send challenge message to server", data);
+    logPacket("Send challenge message to server", data);
 }
 
 void Logger::logChallengeReceive(const std::vector<uint8_t>& data) {
-    logHexDump(LogLevel::DEBUG, "Receive challenge message from server", data);
-    if (data.size() >= 8) {
-        logHexDump(LogLevel::DEBUG, "Login salt", data.data() + 4, 4);
-    }
+    logPacket("Receive challenge message from server", data);
 }
 
 void Logger::logAuthSend(const std::vector<uint8_t>& data) {
-    logHexDump(LogLevel::DEBUG, "Send auth message to server", data);
+    logPacket("Send auth message to server", data);
 }
 
 void Logger::logAuthReceive(const std::vector<uint8_t>& data) {
-    logHexDump(LogLevel::DEBUG, "Receive auth message from server", data);
+    logPacket("Receive auth message from server", data);
 }
 
 void Logger::logKeepAliveSend(const std::vector<uint8_t>& data) {
-    logHexDump(LogLevel::DEBUG, "Send keep alive auth message to server", data);
+    logPacket("Send keep alive auth message to server", data);
 }
 
 void Logger::logKeepAliveReceive(const std::vector<uint8_t>& data) {
-    logHexDump(LogLevel::DEBUG, "Receive keep alive auth message from server", data);
+    logPacket("Receive keep alive auth message from server", data);
 }
 
 void Logger::logHeartbeatSend(const std::vector<uint8_t>& data) {
-    logHexDump(LogLevel::DEBUG, "Send keep alive heartbeat message to server", data);
+    logPacket("Send keep alive heartbeat message to server", data);
 }
 
 void Logger::logHeartbeatReceive(const std::vector<uint8_t>& data) {
-    logHexDump(LogLevel::DEBUG, "Receive keep alive heartbeat message from server", data);
+    logPacket("Receive keep alive heartbeat message from server", data);
 }
 
 void Logger::logLogoutSend(const std::vector<uint8_t>& data) {
-    logHexDump(LogLevel::DEBUG, "Send logout message to server", data);
+    logPacket("Send logout message to server", data);
 }
 
 void Logger::logLogoutReceive(const std::vector<uint8_t>& data) {
-    logHexDump(LogLevel::DEBUG, "Receive logout message from server", data);
+    logPacket("Receive logout message from server", data);
 }
 
 void Logger::flush() {

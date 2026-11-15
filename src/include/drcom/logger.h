@@ -9,6 +9,7 @@
 #include <iostream>
 #include <fstream>
 #include <format>
+#include <atomic>
 
 namespace drcom {
 
@@ -87,11 +88,11 @@ public:
     static Logger& getInstance();
     
     // Configuration
-    void setLevel(LogLevel level) { level_ = level; }
-    LogLevel getLevel() const { return level_; }
+    void setLevel(LogLevel level) { level_.store(level); }
+    LogLevel getLevel() const { return level_.load(); }
     
     void addSink(std::unique_ptr<LogSink> sink);
-    void removeSinks() { sinks_.clear(); }
+    void removeSinks() { std::lock_guard<std::mutex> lock(mutex_); sinks_.clear(); }
     
     // Simple log method that just takes a formatted message
     void log(LogLevel level, const std::string& message) {
@@ -171,12 +172,13 @@ public:
     void flush();
     
 private:
+    void logPacket(const std::string& label, const std::vector<uint8_t>& data);
     Logger() = default;
     ~Logger() = default;
     Logger(const Logger&) = delete;
     Logger& operator=(const Logger&) = delete;
     
-    LogLevel level_{LogLevel::INFO};
+    std::atomic<LogLevel> level_{LogLevel::INFO};
     std::vector<std::unique_ptr<LogSink>> sinks_;
     std::mutex mutex_;
 };

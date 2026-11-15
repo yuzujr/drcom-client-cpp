@@ -148,4 +148,8 @@ Linux/macOS 默认状态目录为 `$XDG_STATE_HOME/drcom-client-cpp`，未设置
 发行包的命名包含版本、平台和架构，并提供 SHA-256 校验文件。
 测试、故障注入和模糊测试见 [验证文档](docs/testing.md)，
 打包与安装布局见 [发布文档](docs/releasing.md)，
-报文验证范围见 [协议说明](docs/protocol.md)。
+报文验证范围见 [协议说明](docs/protocol.md)，
+状态解释与日志隐私见 [故障排查](docs/troubleshooting.md)。
+
+状态快照在状态变化时立即更新，空闲时每 10 秒刷新；超过 30 秒未刷新会显示过期。
+`debug=true` 仅记录阶段、类型、长度和失败细节，不记录原始认证报文或账号信息。

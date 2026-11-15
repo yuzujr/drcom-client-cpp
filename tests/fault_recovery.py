@@ -107,6 +107,7 @@ auto_identity=false
 reconnect_interval=1
 auth_interval=1
 heartbeat_interval=1
+debug=true
 ''')
             with (root / 'client.log').open('w') as log:
                 process = subprocess.Popen([CLIENT, '-c', str(config), '--state-dir', str(state)],
@@ -149,6 +150,9 @@ heartbeat_interval=1
                     if process.poll() is None:
                         process.terminate()
                         process.wait(timeout=3)
+                    text = (root / 'client.log').read_text()
+                    for private in ('test_user', 'test_pass', '74 65 73 74 5f 75 73 65 72', 'Login salt'):
+                        assert private not in text, f'Private data in debug logs: {private}'
         print(f'{mode}: passed')
     finally:
         if process and process.poll() is None:

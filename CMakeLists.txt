@@ -49,8 +49,8 @@ if(WIN32)
             DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
 
-install(FILES README.md LICENSE docs/protocol.md docs/testing.md docs/releasing.md
-        DESTINATION ${CMAKE_INSTALL_DOCDIR})
+install(FILES README.md LICENSE DESTINATION ${CMAKE_INSTALL_DOCDIR})
+install(DIRECTORY docs DESTINATION ${CMAKE_INSTALL_DOCDIR})
 
 include(CTest)
 if(BUILD_TESTING)
@@ -74,6 +74,9 @@ if(BUILD_TESTING)
         set_tests_properties(runtime_control delayed_keepalive
             PROPERTIES TIMEOUT 90 LABELS integration)
     endif()
+    add_executable(logging_tests tests/logging.cpp)
+    target_link_libraries(logging_tests PRIVATE drcom_core)
+    add_test(NAME logging COMMAND logging_tests)
     add_executable(runtime_status_tests tests/runtime_status.cpp)
     target_link_libraries(runtime_status_tests PRIVATE drcom_core)
     add_test(NAME runtime_status COMMAND runtime_status_tests)
