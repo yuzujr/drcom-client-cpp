@@ -157,5 +157,6 @@ heartbeat_interval=1
         server.close()
 
 
-for mode in ('truncated_challenge', 'truncated_login', 'drop', 'stale', 'reject', 'noise'):
-    scenario(mode)
+if __name__ == '__main__':
+    for mode in ('truncated_challenge', 'truncated_login', 'drop', 'stale', 'reject', 'noise'):
+        scenario(mode)

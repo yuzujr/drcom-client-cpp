@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <chrono>
+#include <functional>
 
 namespace drcom {
 struct RuntimeStatus {
@@ -19,11 +20,16 @@ struct RuntimeStatus {
     int64_t updated{0};
     bool running{false};
     bool fresh{false};
+    bool operator==(const RuntimeStatus&) const = default;
 };
 // One persistent automatic-authentication switch per state directory.
 class RuntimeControl {
 public:
-    explicit RuntimeControl(std::filesystem::path directory = {});
+    using Clock = std::function<std::chrono::steady_clock::time_point()>;
+    static constexpr auto heartbeat_interval = std::chrono::seconds(10);
+    static constexpr auto freshness_limit = std::chrono::seconds(30);
+    explicit RuntimeControl(std::filesystem::path directory = {},
+                            Clock clock = [] { return std::chrono::steady_clock::now(); });
     ~RuntimeControl();
     bool enabled() const;
     void setEnabled(bool enabled) const;
@@ -46,6 +52,7 @@ private:
     int lock_fd_{-1};
 #endif
     bool claimed_{false};
+    Clock clock_;
 };
 }
 #endif

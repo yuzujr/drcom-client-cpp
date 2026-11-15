@@ -74,6 +74,12 @@ if(BUILD_TESTING)
         set_tests_properties(runtime_control delayed_keepalive
             PROPERTIES TIMEOUT 90 LABELS integration)
     endif()
+    add_executable(runtime_status_tests tests/runtime_status.cpp)
+    target_link_libraries(runtime_status_tests PRIVATE drcom_core)
+    add_test(NAME runtime_status COMMAND runtime_status_tests)
+    add_test(NAME runtime_soak COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_SOURCE_DIR}/tests/runtime_soak.py $<TARGET_FILE:drcom_client> --cycles 20)
+    set_tests_properties(runtime_soak PROPERTIES TIMEOUT 90 LABELS integration)
     add_executable(config_tests tests/config.cpp)
     target_link_libraries(config_tests PRIVATE drcom_core)
     add_test(NAME configuration COMMAND config_tests)

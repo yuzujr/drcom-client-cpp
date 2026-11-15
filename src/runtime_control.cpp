@@ -38,7 +38,8 @@ bool processRunning(uint64_t pid) {
 #endif
 }
 }
-RuntimeControl::RuntimeControl(std::filesystem::path directory) : directory_(std::move(directory)) {
+RuntimeControl::RuntimeControl(std::filesystem::path directory, Clock clock)
+    : directory_(std::move(directory)), clock_(std::move(clock)) {
     if (!directory_.empty()) return;
 #ifdef _WIN32
     if (const auto* base = std::getenv("LOCALAPPDATA"); base && *base)
@@ -120,18 +121,21 @@ void RuntimeControl::writeStatusLocked() {
 #else
     std::filesystem::rename(temporary, target);
 #endif
-    last_write_ = std::chrono::steady_clock::now();
+    last_write_ = clock_();
 }
 void RuntimeControl::publish(RuntimeStatus status) {
     std::lock_guard<std::mutex> lock(status_mutex_);
     if (!claimed_) return;
     status.pid = status_.pid;
+    status.updated = status_.updated;
+    const bool changed = status != status_;
     status_ = std::move(status);
+    if (!changed && clock_() - last_write_ < heartbeat_interval) return;
     writeStatusLocked();
 }
 void RuntimeControl::refresh() {
     std::lock_guard<std::mutex> lock(status_mutex_);
-    if (claimed_ && std::chrono::steady_clock::now() - last_write_ >= std::chrono::seconds(2))
+    if (claimed_ && clock_() - last_write_ >= heartbeat_interval)
         writeStatusLocked();
 }
 std::optional<RuntimeStatus> RuntimeControl::readStatus() const {
@@ -144,7 +148,7 @@ std::optional<RuntimeStatus> RuntimeControl::readStatus() const {
           >> std::quoted(status.ip) >> std::quoted(status.last_failure))) return std::nullopt;
     const auto age = epochSeconds() - status.updated;
     status.running = processRunning(status.pid);
-    status.fresh = age >= 0 && age <= 6;
+    status.fresh = age >= 0 && age <= freshness_limit.count();
     return status;
 }
 }
