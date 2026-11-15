@@ -35,6 +35,13 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(protocol_vectors tests/protocol_vectors.cpp)
+    target_link_libraries(protocol_vectors PRIVATE drcom_core)
+    find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME protocol_oracle COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_SOURCE_DIR}/tests/protocol_oracle.py $<TARGET_FILE:protocol_vectors>)
+    endif()
     add_executable(config_tests tests/config.cpp)
     target_link_libraries(config_tests PRIVATE drcom_core)
     add_test(NAME configuration COMMAND config_tests)

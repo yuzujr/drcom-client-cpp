@@ -35,10 +35,7 @@ namespace {
         (a) += (b);
 
     // SET/GET macros for endianness handling
-    #if defined(__i386__) || defined(__x86_64__) || defined(__vax__)
-    #define SET(n) (*(MD5_u32plus *)&ptr[(n) * 4])
-    #define GET(n) SET(n)
-    #else
+    // Byte loads avoid alignment and strict-aliasing undefined behavior.
     #define SET(n) \
         (ctx->block[(n)] = \
         (MD5_u32plus)ptr[(n) * 4] | \
@@ -46,7 +43,6 @@ namespace {
         ((MD5_u32plus)ptr[(n) * 4 + 2] << 16) | \
         ((MD5_u32plus)ptr[(n) * 4 + 3] << 24))
     #define GET(n) (ctx->block[(n)])
-    #endif
 
     static const void *body(MD5_CTX *ctx, const void *data, unsigned long size) {
         const uint8_t *ptr = (const uint8_t *)data;
@@ -251,7 +247,7 @@ MD5::Digest MD5::hash(const uint8_t* data, size_t size) {
     Digest digest{};
     MD5_CTX ctx;
     MD5_Init(&ctx);
-    MD5_Update(&ctx, data, size);
+    if (size) MD5_Update(&ctx, data, size);
     MD5_Final(digest.data(), &ctx);
     return digest;
 }
@@ -309,7 +305,7 @@ std::vector<uint8_t> Checksum::calculate(const uint8_t* data, size_t size, size_
     sum = (MULTIPLIER * sum) & 0xffffffff;
     std::vector<uint8_t> result(output_size);
     for (size_t i = 0; i < output_size; ++i) {
-        result[i] = static_cast<uint8_t>((sum >> (i * 8)) & 0xff);
+        result[i] = i < sizeof(sum) ? static_cast<uint8_t>((sum >> (i * 8)) & 0xff) : 0;
     }
     return result;
 }
@@ -332,7 +328,7 @@ std::vector<uint8_t> CRC::calculate(const uint8_t* data, size_t size, size_t out
     sum = (MULTIPLIER * sum);
     std::vector<uint8_t> result(output_size);
     for (size_t i = 0; i < output_size; ++i) {
-        result[i] = static_cast<uint8_t>((sum >> (i * 8)) & 0xff);
+        result[i] = i < sizeof(sum) ? static_cast<uint8_t>((sum >> (i * 8)) & 0xff) : 0;
     }
     return result;
 }

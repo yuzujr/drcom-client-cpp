@@ -211,16 +211,21 @@ private:
         sendResponse(response);
     }
     
-    void handleLoginRequest(const uint8_t* /*data*/, size_t /*len*/) {
+    void handleLoginRequest(const uint8_t* data, size_t len) {
         std::cout << "Handling Login Request" << std::endl;
         
-        // 简单验证（实际应该验证用户名密码）
-        client_authenticated_ = (login_status_code_ == 0x00);
+        // Reject truncated/inconsistent packets instead of authenticating any 0x03 byte.
+        // Digest correctness is checked independently by tests/protocol_oracle.py.
+        const bool valid = len >= 334 && (len - 334) % 4 == 0 && data[1] == 1 &&
+                           data[2] == 0 && data[3] > 20 && data[3] <= 56;
+        const uint8_t status = valid ? login_status_code_ : 0x01;
+        client_authenticated_ = status == 0;
+        if (!valid) std::cout << "Malformed login packet rejected" << std::endl;
         
         // 构建Login响应
         std::vector<uint8_t> response;
         response.push_back(0x04); // Login response type
-        response.push_back(login_status_code_);
+        response.push_back(status);
         response.push_back(0x00); // Reserved
         response.push_back(0x00); // Reserved
         
