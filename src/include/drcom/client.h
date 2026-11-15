@@ -1,6 +1,8 @@
 #ifndef CLIENT_H
 #define CLIENT_H
 
+#include "drcom/protocol.h"
+#include <condition_variable>
 #include <memory>
 #include <thread>
 #include <atomic>
@@ -80,6 +82,7 @@ using ClientEventCallback = std::function<void(ClientEvent, const std::string&)>
 class DrcomClient {
 public:
     DrcomClient();
+    explicit DrcomClient(Config& config);
     ~DrcomClient();
     
     // Non-copyable, non-movable (due to complex state)
@@ -173,11 +176,7 @@ private:
     mutable std::mutex disconnect_status_mutex_;
     
     // Protocol state
-    std::array<uint8_t, 4> login_salt_{{0}};
-    std::array<uint8_t, 4> logout_salt_{{0}};
-    std::array<uint8_t, 16> md5_password_{{0}};  // MD5 digest
-    std::array<uint8_t, 16> server_drcom_indicator_{{0}};
-    std::array<uint8_t, 4> heartbeat_server_token_{{0}};
+    protocol::Session session_;
     uint64_t heartbeat_counter_{0};
     uint64_t auth_counter_{0};
     
@@ -246,11 +245,7 @@ private:
     // Interruptible wait for the keepalive worker
     bool interruptibleWaitUntil(std::chrono::steady_clock::time_point deadline);
 
-    // IP address parsing
-    std::array<uint8_t, 4> parseIPAddress(const std::string& ip);
-    
-    // MAC address parsing  
-    std::array<uint8_t, 6> parseMAC(const std::string& mac);
+
 };
 
 /**

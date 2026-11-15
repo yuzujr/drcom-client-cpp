@@ -60,8 +60,10 @@ const char* disconnectReasonToString(DisconnectReason reason) {
 }
 
 // ================= DrcomClient Implementation =================
-DrcomClient::DrcomClient() 
-    : config_(Config::getInstance())
+DrcomClient::DrcomClient() : DrcomClient(Config::getInstance()) {}
+
+DrcomClient::DrcomClient(Config& config)
+    : config_(config)
     , logger_(Logger::getInstance())
     , socket_(std::make_unique<UdpSocket>()) {
     
@@ -284,7 +286,7 @@ void DrcomClient::setDisconnectStatus(DisconnectReason reason, std::string messa
     last_disconnect_message_ = std::move(message);
 }
 
-// Simplified protocol implementation (placeholder)
+// Protocol exchanges
 bool DrcomClient::performChallenge(bool is_login, int timeout_ms,
                                    std::string* error_message,
                                    DisconnectReason* disconnect_reason) {
@@ -540,248 +542,25 @@ bool DrcomClient::sendExtraHeartbeat() {
 
 // Placeholder packet builders
 std::vector<uint8_t> DrcomClient::buildChallengePacket(bool is_login) {
-    std::vector<uint8_t> packet(20);
-    packet[0] = 0x01;
-    packet[1] = is_login ? 0x02 : 0x03;
-    packet[2] = randomByte();
-    packet[3] = randomByte();
-    // Add auth version
-    auto& protocol = config_.getProtocolConfig();
-    packet[4] = protocol.auth_version[0];
-    packet[5] = protocol.auth_version[1];
-    return packet;
+    return protocol::buildChallengePacket(config_, is_login, {randomByte(), randomByte()});
 }
-
 std::vector<uint8_t> DrcomClient::buildLoginPacket() {
-    const auto& user_config = config_.getUserConfig();
-    const auto& protocol_config = config_.getProtocolConfig();
-    
-    // Calculate dynamic packet size
-    const size_t packet_size = 334 + ((user_config.password.length() - 1) / 4) * 4;
-    std::vector<uint8_t> packet(packet_size, 0);
-    
-    // Header: 0x03 0x01 0x00 username_len+20
-    packet[0] = 0x03;
-    packet[1] = 0x01;
-    packet[2] = 0x00;
-    packet[3] = static_cast<uint8_t>(user_config.username.length() + 20);
-    
-    // Build MD5 digest A for password: md5(0x03 0x01 [salt] [password])
-    std::vector<uint8_t> md5a_plain;
-    md5a_plain.push_back(0x03);
-    md5a_plain.push_back(0x01);
-    md5a_plain.insert(md5a_plain.end(), login_salt_.begin(), login_salt_.end());
-    md5a_plain.insert(md5a_plain.end(), user_config.password.begin(), user_config.password.end());
-    
-    auto md5a = crypto::MD5::hash(md5a_plain);
-    std::copy(md5a.begin(), md5a.end(), packet.begin() + 4);
-    std::copy(md5a.begin(), md5a.end(), md5_password_.begin());
-    
-    // Username (36 bytes)
-    const size_t username_copy_len = std::min(user_config.username.length(), static_cast<size_t>(36));
-    std::copy(user_config.username.begin(), 
-              user_config.username.begin() + username_copy_len, 
-              packet.begin() + 20);
-    
-    // Control check status and adapter num
-    packet[56] = protocol_config.control_check_status;
-    packet[57] = protocol_config.adapter_num;
-    
-    // MAC XOR MD5A (6 bytes)
-    for (size_t i = 0; i < 6; ++i) {
-        packet[58 + i] = user_config.mac[i] ^ md5a[i];
-    }
-    
-    // Build MD5 digest B: md5(0x01 [password] [salt] 0x00 0x00 0x00 0x00)
-    std::vector<uint8_t> md5b_plain;
-    md5b_plain.push_back(0x01);
-    md5b_plain.insert(md5b_plain.end(), user_config.password.begin(), user_config.password.end());
-    md5b_plain.insert(md5b_plain.end(), login_salt_.begin(), login_salt_.end());
-    md5b_plain.insert(md5b_plain.end(), 4, 0x00);  // 4 zero bytes
-    
-    auto md5b = crypto::MD5::hash(md5b_plain);
-    std::copy(md5b.begin(), md5b.end(), packet.begin() + 64);
-    
-    // IP indicator
-    packet[80] = 0x01;
-    
-    // Client IP (4 bytes)
-    auto ip_bytes = parseIPAddress(user_config.ip);
-    std::copy(ip_bytes.begin(), ip_bytes.end(), packet.begin() + 81);
-    
-    // Calculate MD5 digest C: md5([first 97 bytes] 0x14 0x00 0x07 0x0b)
-    std::vector<uint8_t> md5c_plain(packet.begin(), packet.begin() + 97);
-    md5c_plain.insert(md5c_plain.end(), {0x14, 0x00, 0x07, 0x0b});
-    
-    auto md5c = crypto::MD5::hash(md5c_plain);
-    std::copy(md5c.begin(), md5c.begin() + 8, packet.begin() + 97);
-    
-    // IP dog (1 byte) + 4 zero bytes padding already initialized
-    packet[105] = protocol_config.ip_dog;
-    
-    // Hostname (32 bytes max)
-    const size_t hostname_len = std::min(user_config.hostname.length(), static_cast<size_t>(32));
-    std::copy(user_config.hostname.begin(), 
-              user_config.hostname.begin() + hostname_len, 
-              packet.begin() + 110);
-    
-    // Primary DNS (4 bytes)
-    auto dns_bytes = parseIPAddress(user_config.primary_dns);
-    std::copy(dns_bytes.begin(), dns_bytes.end(), packet.begin() + 142);
-    
-    // DHCP server (4 bytes)  
-    auto dhcp_bytes = parseIPAddress(user_config.dhcp_server);
-    std::copy(dhcp_bytes.begin(), dhcp_bytes.end(), packet.begin() + 146);
-    
-    // Zero padding until 181 (already initialized)
-    
-    // Unknown byte 0x01
-    packet[181] = 0x01;
-    
-    // DrCOM indicator (8 bytes)
-    const uint8_t drcom_indicator[] = {0x44, 0x72, 0x43, 0x4f, 0x4d, 0x00, 0xcf, 0x07};
-    std::copy(drcom_indicator, drcom_indicator + 8, packet.begin() + 182);
-    
-    // Auth version (2 bytes)
-    packet[190] = protocol_config.auth_version[0];
-    packet[191] = protocol_config.auth_version[1];
-    
-    // OS info (54 bytes max, zero padded)
-    const size_t os_info_len = std::min(user_config.os_info.length(), static_cast<size_t>(54));
-    std::copy(user_config.os_info.begin(), 
-              user_config.os_info.begin() + os_info_len, 
-              packet.begin() + 192);
-    
-    // Remaining fields are zero-padded and handled by protocol-specific logic
-    // Password length calculation and additional fields at offset 246+ 
-    
+    auto packet = protocol::buildLoginPacket(config_, session_);
+    std::copy_n(packet.begin() + 4, 16, session_.md5_password.begin());
     return packet;
 }
-
 std::vector<uint8_t> DrcomClient::buildLogoutPacket() {
-    std::vector<uint8_t> packet(80, 0);
-    const auto& user_config = config_.getUserConfig();
-    
-    // Header: 0x06 0x01 0x00 username_len+20
-    packet[0] = 0x06;
-    packet[1] = 0x01;
-    packet[2] = 0x00;
-    packet[3] = static_cast<uint8_t>(user_config.username.length() + 20);
-    
-    // MD5 password (16 bytes at offset 4-19)
-    std::copy(md5_password_.begin(), md5_password_.end(), packet.begin() + 4);
-    
-    // Username (36 bytes at offset 20-55)
-    const size_t username_copy_len = std::min(user_config.username.length(), static_cast<size_t>(36));
-    std::copy(user_config.username.begin(), 
-              user_config.username.begin() + username_copy_len, 
-              packet.begin() + 20);
-    
-    // Control check status and adapter num
-    const auto& protocol_config = config_.getProtocolConfig();
-    packet[56] = protocol_config.control_check_status;
-    packet[57] = protocol_config.adapter_num;
-    
-    // MAC XOR MD5 password (6 bytes at offset 58-63)
-    for (size_t i = 0; i < 6; ++i) {
-        packet[58 + i] = user_config.mac[i] ^ md5_password_[i];
-    }
-    
-    // Logout salt (4 bytes at offset 64-67) if available
-    if (!std::all_of(logout_salt_.begin(), logout_salt_.end(), 
-                     [](uint8_t b) { return b == 0; })) {
-        std::copy(logout_salt_.begin(), logout_salt_.end(), packet.begin() + 64);
-    }
-    
-    // Remaining bytes 68-79 are zero-padded (already initialized)
-    
-    return packet;
+    return protocol::buildLogoutPacket(config_, session_);
 }
-
 std::vector<uint8_t> DrcomClient::buildKeepAliveAuthPacket() {
-    std::vector<uint8_t> packet(38, 0);
-    
-    // Header: 0xff + MD5 password (16 bytes)
-    packet[0] = 0xff;
-    std::copy(md5_password_.begin(), md5_password_.end(), packet.begin() + 1);
-    
-    // Zero padding bytes at offset 17-19 (3 bytes, already initialized)
-    
-    // Server DRCOM indicator (16 bytes at offset 20-35)
-    if (!std::all_of(server_drcom_indicator_.begin(), server_drcom_indicator_.end(), 
-                     [](uint8_t b) { return b == 0; })) {
-        std::copy(server_drcom_indicator_.begin(), server_drcom_indicator_.end(), 
-                  packet.begin() + 20);
-    }
-    
-    // Timestamp (2 bytes at offset 36-37)
-    time_t time_now = time(NULL);
-    packet[36] = static_cast<uint8_t>(time_now % (2 << 7));
-    time_now /= (2 << 7);
-    packet[37] = static_cast<uint8_t>(time_now % (2 << 7));
-    
-    return packet;
+    return protocol::buildKeepAliveAuthPacket(session_, static_cast<uint64_t>(std::time(nullptr)));
 }
-
 std::vector<uint8_t> DrcomClient::buildKeepAliveHeartbeatPacket(bool is_first, bool is_extra) {
-    std::vector<uint8_t> packet(40, 0);
-    const auto& protocol_config = config_.getProtocolConfig();
-    
-    // Header: 0x07 + heartbeat counter (1 byte)
-    packet[0] = 0x07;
-    packet[1] = static_cast<uint8_t>(heartbeat_counter_ & 0xff);
-    
-    // Fixed bytes sequence: 0x28 0x00 0x0b (3 bytes at offset 2-4)
-    packet[2] = 0x28;
-    packet[3] = 0x00;
-    packet[4] = 0x0b;
-    
-    // Fixed byte: 0x01 (1 byte at offset 5)
-    packet[5] = 0x01;
-    
-    // Heartbeat version (2 bytes at offset 6-7)
-    if (is_first) {
-        packet[6] = protocol_config.first_heartbeat_version[0];
-        packet[7] = protocol_config.first_heartbeat_version[1]; 
-    } else if (is_extra) {
-        packet[6] = protocol_config.extra_heartbeat_version[0];
-        packet[7] = protocol_config.extra_heartbeat_version[1];
-    } else {
-        packet[6] = protocol_config.keep_alive_version[0];
-        packet[7] = protocol_config.keep_alive_version[1];
-    }
-    
-    // Random number (4 bytes at offset 8-11)
-    packet[8] = randomByte();
-    packet[9] = randomByte();
-    packet[10] = randomByte();
-    packet[11] = randomByte();
-    
-    // Zero padding at offset 12-15 (already initialized)
-    
-    // Server token (4 bytes at offset 16-19) if available
-    if (!std::all_of(heartbeat_server_token_.begin(), heartbeat_server_token_.end(), 
-                     [](uint8_t b) { return b == 0; })) {
-        std::copy(heartbeat_server_token_.begin(), heartbeat_server_token_.end(), 
-                  packet.begin() + 16);
-    }
-    
-    // CRC checksum at offset 20-23 (4 bytes)
-    // Calculate CRC over first 20 bytes
-    auto crc_bytes = crypto::CRC::calculate(std::vector<uint8_t>(packet.begin(), packet.begin() + 20), 4);
-    std::copy(crc_bytes.begin(), crc_bytes.end(), packet.begin() + 20);
-    
-    // Client IP at offset 24-27
-    const auto& user_config = config_.getUserConfig();
-    auto ip_bytes = parseIPAddress(user_config.ip);
-    std::copy(ip_bytes.begin(), ip_bytes.end(), packet.begin() + 24);
-    
-    // Zero padding for remaining bytes 28-39 (already initialized)
-    
-    return packet;
+    return protocol::buildKeepAliveHeartbeatPacket(config_, session_, heartbeat_counter_,
+        is_first, is_extra, {randomByte(), randomByte(), randomByte(), randomByte()});
 }
 
-// Placeholder packet handlers
+// Response validation
 bool DrcomClient::handleChallengeResponse(const std::vector<uint8_t>& data, bool is_login,
                                           std::string* error_message,
                                           DisconnectReason* disconnect_reason) {
@@ -812,10 +591,10 @@ bool DrcomClient::handleChallengeResponse(const std::vector<uint8_t>& data, bool
 
     // Extract salt
     if (is_login) {
-        std::copy(data.begin() + 4, data.begin() + 8, login_salt_.begin());
+        std::copy(data.begin() + 4, data.begin() + 8, session_.login_salt.begin());
         logger_.logChallengeReceive(data);
     } else {
-        std::copy(data.begin() + 4, data.begin() + 8, logout_salt_.begin());
+        std::copy(data.begin() + 4, data.begin() + 8, session_.logout_salt.begin());
     }
 
     return true;
@@ -857,7 +636,7 @@ bool DrcomClient::handleLoginResponse(const std::vector<uint8_t>& data,
     }
     
     // Extract server indicators
-    std::copy(data.begin() + 23, data.begin() + 39, server_drcom_indicator_.begin());
+    std::copy(data.begin() + 23, data.begin() + 39, session_.server_drcom_indicator.begin());
     return true;
 }
 
@@ -927,7 +706,7 @@ bool DrcomClient::handleKeepAliveAuthResponse(const std::vector<uint8_t>& data,
     }
 
     if (data.size() >= 20) {
-        std::copy(data.begin() + 16, data.begin() + 20, heartbeat_server_token_.begin());
+        std::copy(data.begin() + 16, data.begin() + 20, session_.heartbeat_server_token.begin());
     }
 
     std::lock_guard<std::mutex> lock(stats_mutex_);
@@ -960,7 +739,7 @@ bool DrcomClient::handleKeepAliveHeartbeatResponse(const std::vector<uint8_t>& d
         return false;
     }
 
-    std::copy(data.begin() + 16, data.begin() + 20, heartbeat_server_token_.begin());
+    std::copy(data.begin() + 16, data.begin() + 20, session_.heartbeat_server_token.begin());
     std::lock_guard<std::mutex> lock(stats_mutex_);
     stats_.heartbeat_packets_received++;
     return true;
@@ -1024,48 +803,6 @@ bool DrcomClient::sendAndReceive(const std::vector<uint8_t>& send_data,
         stats_.bytes_received += received;
     }
     return true;
-}
-
-std::array<uint8_t, 4> DrcomClient::parseIPAddress(const std::string& ip) {
-    std::array<uint8_t, 4> result{};
-    
-    size_t start = 0;
-    for (int i = 0; i < 4; ++i) {
-        size_t end = ip.find('.', start);
-        if (end == std::string::npos && i < 3) break;
-        if (end == std::string::npos) end = ip.length();
-        
-        std::string octet = ip.substr(start, end - start);
-        result[i] = static_cast<uint8_t>(std::stoi(octet));
-        start = end + 1;
-    }
-    
-    return result;
-}
-
-std::array<uint8_t, 6> DrcomClient::parseMAC(const std::string& mac) {
-    std::array<uint8_t, 6> result{};
-    
-    if (mac.length() >= 6) {
-        // Handle binary MAC format (6 bytes)
-        for (size_t i = 0; i < 6; ++i) {
-            result[i] = static_cast<uint8_t>(mac[i]);
-        }
-    } else {
-        // Handle string MAC format like "00:11:22:33:44:55"
-        size_t start = 0;
-        for (int i = 0; i < 6; ++i) {
-            size_t end = mac.find(':', start);
-            if (end == std::string::npos && i < 5) break;
-            if (end == std::string::npos) end = mac.length();
-            
-            std::string octet = mac.substr(start, end - start);
-            result[i] = static_cast<uint8_t>(std::stoi(octet, nullptr, 16));
-            start = end + 1;
-        }
-    }
-    
-    return result;
 }
 
 // ================= DrcomClientFactory =================

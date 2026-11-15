@@ -1,23 +1,14 @@
-file(GLOB_RECURSE SOURCE_FILES "*.cpp")
-
+find_package(Threads REQUIRED)
+add_library(drcom_core STATIC
+    client.cpp config.cpp crypto.cpp logger.cpp network.cpp protocol.cpp runtime_control.cpp)
+target_include_directories(drcom_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(drcom_core PUBLIC Threads::Threads)
 if(WIN32)
-add_executable(drcom_client WIN32 ${SOURCE_FILES})
+    target_link_libraries(drcom_core PUBLIC ws2_32 iphlpapi)
+    add_executable(drcom_client WIN32 main.cpp)
 else()
-add_executable(drcom_client ${SOURCE_FILES})
+    add_executable(drcom_client main.cpp)
 endif()
-
-target_compile_definitions(drcom_client PRIVATE
-    DRCOM_CLIENT_VERSION="${PROJECT_VERSION}"
-)
-
-target_include_directories(drcom_client PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-)
-
-if(WIN32)
-    target_link_libraries(drcom_client ws2_32 iphlpapi)
-endif()
-
-install(TARGETS drcom_client
-    RUNTIME DESTINATION ${DRCOM_INSTALL_DIR}/bin
-)
+target_link_libraries(drcom_client PRIVATE drcom_core)
+target_compile_definitions(drcom_client PRIVATE DRCOM_CLIENT_VERSION="${PROJECT_VERSION}")
+install(TARGETS drcom_client RUNTIME DESTINATION ${DRCOM_INSTALL_DIR}/bin)
