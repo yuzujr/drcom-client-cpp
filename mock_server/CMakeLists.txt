@@ -7,5 +7,5 @@ if(WIN32)
 endif()
 
 install(TARGETS mock_drcom_server
-    RUNTIME DESTINATION ${DRCOM_INSTALL_DIR}/bin
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )

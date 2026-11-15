@@ -37,20 +37,20 @@ endif()
 
 include(GNUInstallDirs)
 
-# 设置自定义安装目录
-set(DRCOM_INSTALL_DIR "drcom-client-cpp")
-
 add_subdirectory(src)
 add_subdirectory(mock_server)
 
 # 安装配置文件到自定义目录
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/config 
-        DESTINATION ${DRCOM_INSTALL_DIR})
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/drcom-client-cpp)
 
 if(WIN32)
     install(FILES ${CMAKE_SOURCE_DIR}/scripts/windows-autostart.ps1
-            DESTINATION ${DRCOM_INSTALL_DIR}/bin)
+            DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
+
+install(FILES README.md LICENSE docs/protocol.md docs/testing.md docs/releasing.md
+        DESTINATION ${CMAKE_INSTALL_DOCDIR})
 
 include(CTest)
 if(BUILD_TESTING)

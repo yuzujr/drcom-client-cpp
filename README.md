@@ -76,14 +76,16 @@ nix run github:yuzujr/drcom-client-cpp -- -c /path/to/drcom.conf
 # 创建构建目录
 mkdir build && cd build
 
-# 配置项目
-cmake .. -DCMAKE_BUILD_TYPE=Release (-DCMAKE_INSTALL_PREFIX="安装目录")(可选)
+# 配置项目（默认测试还需要 Python 3.9+）
+cmake .. -DCMAKE_BUILD_TYPE=Release
+# 可增加 -DCMAKE_INSTALL_PREFIX=/path/to/install
+# 仅编译程序、不构建测试：增加 -DBUILD_TESTING=OFF
 
 # 编译
 cmake --build . --config Release
 
 # 安装（可选）
-cmake --build . --target install
+cmake --install . --config Release
 ```
 
 编译完成后，可执行文件位于：
@@ -140,3 +142,10 @@ Linux/macOS 默认状态目录为 `$XDG_STATE_HOME/drcom-client-cpp`，未设置
 旧认证记录不会显示为当前已认证；旧版本没有状态记录时显示 unknown。
 “已认证”表示 DRCOM 登录成功并正在维护会话，不代表所有互联网目标都可达。
 同类重试失败的明细仍为 debug；连续失败期间约每 5 分钟输出一次 INFO 进度汇总。
+
+
+安装默认使用 `<prefix>/bin` 和 `<prefix>/share/drcom-client-cpp/config`。
+发行包的命名包含版本、平台和架构，并提供 SHA-256 校验文件。
+测试、故障注入和模糊测试见 [验证文档](docs/testing.md)，
+打包与安装布局见 [发布文档](docs/releasing.md)，
+报文验证范围见 [协议说明](docs/protocol.md)。

@@ -7,3 +7,8 @@ build-release/
 .codex
 compile_commands.json
 drcom.log
+
+__pycache__/
+/build-*/
+drcom.log.1
+/dist/

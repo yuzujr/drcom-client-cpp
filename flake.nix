@@ -24,14 +24,6 @@
         nativeCheckInputs = [ pkgs.python3 ];
         doCheck = true;
 
-        installPhase = ''
-          runHook preInstall
-          install -Dm755 src/drcom_client $out/bin/drcom_client
-          install -Dm644 ${./config/drcom_jlu.conf} \
-            $out/share/drcom-client-cpp/config/drcom_jlu.conf
-          runHook postInstall
-        '';
-
         meta = {
           description = "DRCOM 802.1X client for JLU";
           homepage = "https://github.com/yuzujr/drcom-client-cpp";

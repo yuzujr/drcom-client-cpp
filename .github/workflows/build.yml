@@ -2,323 +2,92 @@ name: Build and Test
 
 on:
   push:
-    branches: [ main, develop ]
-    tags: [ 'v*' ]  # 当推送 tag 时触发
+    branches: [main, develop]
+    tags: ['v*']
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 permissions:
-  contents: write  # 需要写入权限以创建 release
+  contents: read
 
 jobs:
-  build-linux:
-    runs-on: ubuntu-latest
-    
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            runner: ubuntu-latest
+          - os: windows
+            runner: windows-2022
+          - os: macos
+            runner: macos-latest
+    runs-on: ${{ matrix.runner }}
     steps:
-    - uses: actions/checkout@v4
-
-    - uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
-    
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y cmake build-essential ccache
-    
-    - name: Setup ccache
-      uses: hendrikmuhs/ccache-action@v1.2
-      with:
-        key: ${{ runner.os }}-ccache-${{ hashFiles('**/CMakeLists.txt', '**/*.cpp', '**/*.h') }}
-    
-    - name: Configure CMake
-      run: |
-        mkdir build
-        cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache
-    
-    - name: Build
-      run: |
-        cd build
-        make -j$(nproc)
-    
-    - name: Run CTest
-      run: ctest --test-dir build --output-on-failure
-
-    - name: Test build artifacts
-      run: |
-        test -f build/src/drcom_client
-        test -f build/mock_server/mock_drcom_server
-        echo "Build artifacts verified successfully"
-    
-    
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: drcom-client-linux
-        path: |
-          build/src/drcom_client
-          build/mock_server/mock_drcom_server
-          config/
-        retention-days: 5
-
-  build-windows:
-    runs-on: windows-2022
-    
-    steps:
-    - uses: actions/checkout@v4
-
-    - uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
-    
-    - name: Configure CMake
-      run: |
-        $configureOutput = cmake -S . -B build -G "Visual Studio 17 2022" -A x64 2>&1
-        $configureOutput | ForEach-Object { Write-Host $_ }
-        if ($LASTEXITCODE -ne 0) {
-          $message = ($configureOutput | ForEach-Object { $_.ToString() }) -join ' | '
-          Write-Output "::error title=Windows CMake configuration failed::$message"
-          exit $LASTEXITCODE
-        }
-    
-    - name: Build
-      run: |
-        cd build
-        cmake --build . --config Release -j
-    
-    - name: Run CTest
-      run: ctest --test-dir build -C Release --output-on-failure -j 4
-
-    - name: Test build artifacts
-      run: |
-        if (-not (Test-Path "build/src/Release/drcom_client.exe")) { exit 1 }
-        if (-not (Test-Path "build/mock_server/Release/mock_drcom_server.exe")) { exit 1 }
-        Write-Host "Build artifacts verified successfully"
-    
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: drcom-client-windows
-        path: |
-          build/src/Release/drcom_client.exe
-          build/mock_server/Release/mock_drcom_server.exe
-          config/
-          scripts/windows-autostart.ps1
-        retention-days: 5
-
-  build-macos:
-    runs-on: macos-latest
-    
-    steps:
-    - uses: actions/checkout@v4
-
-    - uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
-    
-    - name: Install dependencies
-      run: |
-        brew update
-        if brew list --formula | grep -q '^cmake$'; then
-          echo "cmake already installed:"
-          cmake --version
-        else
-          brew install cmake
-        fi
-        if brew list --formula | grep -q '^ccache$'; then
-          echo "ccache already installed:"
-          ccache --version
-        else
-          brew install ccache
-        fi
-    
-    - name: Setup ccache
-      uses: hendrikmuhs/ccache-action@v1.2
-      with:
-        key: ${{ runner.os }}-ccache-${{ hashFiles('**/CMakeLists.txt', '**/*.cpp', '**/*.h') }}
-    
-    - name: Configure CMake
-      run: |
-        mkdir build
-        cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache
-    
-    - name: Build
-      run: |
-        cd build
-        make -j$(sysctl -n hw.ncpu)
-    
-    - name: Run CTest
-      run: ctest --test-dir build --output-on-failure -j 4
-
-    - name: Test build artifacts
-      run: |
-        test -f build/src/drcom_client
-        test -f build/mock_server/mock_drcom_server
-        echo "Build artifacts verified successfully"
-    
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: drcom-client-macos
-        path: |
-          build/src/drcom_client
-          build/mock_server/mock_drcom_server
-          config/
-        retention-days: 5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check release version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: test "$GITHUB_REF_NAME" = "v$(tr -d '\r\n' < VERSION)"
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --config Release -j 4
+      - name: Run CTest
+        run: ctest --test-dir build -C Release --output-on-failure -j 4
+      - name: Install, package and test extracted payload
+        run: python scripts/package.py --build-dir build --output-dir dist --config Release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: drcom-client-${{ matrix.os }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 5
 
   sanitizers:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
-    - name: Configure and build ASan/UBSan and fuzzers
-      run: |
-        cmake -S . -B build -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug -DDRCOM_SANITIZERS=address,undefined -DDRCOM_BUILD_FUZZERS=ON
-        cmake --build build -j 4
-    - name: Run instrumented tests
-      env:
-        ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
-        UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
-      run: ctest --test-dir build --output-on-failure -j 4
-    - name: Bounded fuzz smoke
-      run: |
-        mkdir -p /tmp/config-corpus /tmp/crypto-corpus
-        cp config/*.conf /tmp/config-corpus/
-        printf 'abc' > /tmp/crypto-corpus/seed
-        build/fuzz_config /tmp/config-corpus -max_total_time=20 -timeout=5 -max_len=8192
-        build/fuzz_crypto /tmp/crypto-corpus -max_total_time=20 -timeout=5 -max_len=8192
-
-  integration-test:
-    runs-on: ubuntu-latest
-    needs: build-linux
-    
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Download Linux artifacts
-      uses: actions/download-artifact@v4
-      with:
-        name: drcom-client-linux
-        path: artifacts/
-    
-    - name: List downloaded files for debugging
-      run: |
-        echo "Contents of artifacts directory:"
-        find artifacts/ -type f -ls
-        echo "Current directory contents:"
-        ls -la
-    
-    - name: Make executables runnable
-      run: |
-        # 查找实际的可执行文件位置
-        DRCOM_CLIENT=$(find artifacts/ -name "drcom_client" -type f)
-        MOCK_SERVER=$(find artifacts/ -name "mock_drcom_server" -type f)
-        
-        if [ -z "$DRCOM_CLIENT" ] || [ -z "$MOCK_SERVER" ]; then
-          echo "ERROR: Could not find required executables"
-          echo "Looking for drcom_client: $DRCOM_CLIENT"
-          echo "Looking for mock_drcom_server: $MOCK_SERVER"
-          exit 1
-        fi
-        
-        chmod +x "$DRCOM_CLIENT"
-        chmod +x "$MOCK_SERVER"
-        
-        # 为后续步骤导出路径
-        echo "DRCOM_CLIENT=$DRCOM_CLIENT" >> $GITHUB_ENV
-        echo "MOCK_SERVER=$MOCK_SERVER" >> $GITHUB_ENV
-    
-    - name: Run integration test
-      run: |
-        python3 tests/delayed_keepalive.py "$DRCOM_CLIENT" "$MOCK_SERVER"
-        python3 tests/runtime_control.py "$DRCOM_CLIENT" "$MOCK_SERVER"
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Configure and build ASan/UBSan and fuzzers
+        run: |
+          cmake -S . -B build -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug -DDRCOM_SANITIZERS=address,undefined -DDRCOM_BUILD_FUZZERS=ON
+          cmake --build build -j 4
+      - name: Run instrumented tests
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: ctest --test-dir build --output-on-failure -j 4
+      - name: Bounded fuzz smoke
+        run: |
+          mkdir -p /tmp/config-corpus /tmp/crypto-corpus
+          cp config/*.conf /tmp/config-corpus/
+          printf 'abc' > /tmp/crypto-corpus/seed
+          build/fuzz_config /tmp/config-corpus -max_total_time=20 -timeout=5 -max_len=8192
+          build/fuzz_crypto /tmp/crypto-corpus -max_total_time=20 -timeout=5 -max_len=8192
 
   create-release:
     runs-on: ubuntu-latest
-    needs: [build-linux, build-windows, build-macos, integration-test]
-    if: startsWith(github.ref, 'refs/tags/v')  # 只在推送 tag 时运行
-    
+    needs: [build, sanitizers]
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Download all artifacts
-      uses: actions/download-artifact@v4
-    
-    - name: Create release packages
-      run: |
-        # 创建 Linux 发布包
-        mkdir -p releases/linux
-        find drcom-client-linux/ -name "drcom_client" -type f -exec cp {} releases/linux/ \;
-        find drcom-client-linux/ -name "mock_drcom_server" -type f -exec cp {} releases/linux/ \;
-        if [ -d "drcom-client-linux/config" ]; then
-          cp -r drcom-client-linux/config releases/linux/
-        fi
-        tar -czf drcom-client-linux.tar.gz -C releases linux/
-        
-        # 创建 Windows 发布包
-        mkdir -p releases/windows
-        find drcom-client-windows/ -name "drcom_client.exe" -type f -exec cp {} releases/windows/ \;
-        find drcom-client-windows/ -name "mock_drcom_server.exe" -type f -exec cp {} releases/windows/ \;
-        find drcom-client-windows/ -name "windows-autostart.ps1" -type f -exec cp {} releases/windows/ \;
-        if [ -d "drcom-client-windows/config" ]; then
-          cp -r drcom-client-windows/config releases/windows/
-        fi
-        (cd releases && zip -r ../drcom-client-windows.zip windows/)
-        
-        # 创建 macOS 发布包
-        mkdir -p releases/macos
-        find drcom-client-macos/ -name "drcom_client" -type f -exec cp {} releases/macos/ \;
-        find drcom-client-macos/ -name "mock_drcom_server" -type f -exec cp {} releases/macos/ \;
-        if [ -d "drcom-client-macos/config" ]; then
-          cp -r drcom-client-macos/config releases/macos/
-        fi
-        tar -czf drcom-client-macos.tar.gz -C releases macos/
-        
-        # 验证发布包
-        echo "=== Release packages created ==="
-        ls -la *.tar.gz *.zip
-        
-        echo "=== Contents verification ==="
-        tar -tzf drcom-client-linux.tar.gz | head -10
-        tar -tzf drcom-client-macos.tar.gz | head -10
-        unzip -l drcom-client-windows.zip | head -10
-    
-    - name: Upload release packages
-      uses: actions/upload-artifact@v4
-      with:
-        name: release-packages
-        path: |
-          drcom-client-linux.tar.gz
-          drcom-client-windows.zip
-          drcom-client-macos.tar.gz
-    
-    - name: Generate release info
-      id: release_info
-      run: |
-        # 从 git tag 获取版本号
-        VERSION="${GITHUB_REF#refs/tags/}"
-        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-        echo "Using tag: $VERSION"
-    
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: ${{ steps.release_info.outputs.VERSION }}
-        name: "DrCom Client ${{ steps.release_info.outputs.VERSION }}"
-        body: |         
-          ## 构建信息
-          - 构建时间: ${{ github.event.head_commit.timestamp }}
-          - 提交: ${{ github.sha }}
-          - 分支: ${{ github.ref_name }}
-        files: |
-          drcom-client-linux.tar.gz
-          drcom-client-windows.zip
-          drcom-client-macos.tar.gz
-        draft: false
-        prerelease: false
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: drcom-client-*
+          merge-multiple: true
+          path: dist
+      - name: Verify all package checksums
+        working-directory: dist
+        run: sha256sum --check *.sha256
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
