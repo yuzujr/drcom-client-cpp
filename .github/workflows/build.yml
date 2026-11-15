@@ -16,6 +16,10 @@ jobs:
     
     steps:
     - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
     
     - name: Install dependencies
       run: |
@@ -38,7 +42,7 @@ jobs:
         cd build
         make -j$(nproc)
     
-    - name: Test network selection
+    - name: Run CTest
       run: ctest --test-dir build --output-on-failure
 
     - name: Test build artifacts
@@ -63,6 +67,10 @@ jobs:
     
     steps:
     - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
     
     - name: Configure CMake
       run: |
@@ -79,6 +87,9 @@ jobs:
         cd build
         cmake --build . --config Release -j
     
+    - name: Run CTest
+      run: ctest --test-dir build -C Release --output-on-failure -j 4
+
     - name: Test build artifacts
       run: |
         if (-not (Test-Path "build/src/Release/drcom_client.exe")) { exit 1 }
@@ -101,6 +112,10 @@ jobs:
     
     steps:
     - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
     
     - name: Install dependencies
       run: |
@@ -134,6 +149,9 @@ jobs:
         cd build
         make -j$(sysctl -n hw.ncpu)
     
+    - name: Run CTest
+      run: ctest --test-dir build --output-on-failure -j 4
+
     - name: Test build artifacts
       run: |
         test -f build/src/drcom_client
@@ -149,6 +167,30 @@ jobs:
           build/mock_server/mock_drcom_server
           config/
         retention-days: 5
+
+  sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Configure and build ASan/UBSan and fuzzers
+      run: |
+        cmake -S . -B build -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug -DDRCOM_SANITIZERS=address,undefined -DDRCOM_BUILD_FUZZERS=ON
+        cmake --build build -j 4
+    - name: Run instrumented tests
+      env:
+        ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+        UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+      run: ctest --test-dir build --output-on-failure -j 4
+    - name: Bounded fuzz smoke
+      run: |
+        mkdir -p /tmp/config-corpus /tmp/crypto-corpus
+        cp config/*.conf /tmp/config-corpus/
+        printf 'abc' > /tmp/crypto-corpus/seed
+        build/fuzz_config /tmp/config-corpus -max_total_time=20 -timeout=5 -max_len=8192
+        build/fuzz_crypto /tmp/crypto-corpus -max_total_time=20 -timeout=5 -max_len=8192
 
   integration-test:
     runs-on: ubuntu-latest

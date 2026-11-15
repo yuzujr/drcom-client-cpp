@@ -21,6 +21,7 @@
         src = ./.;
 
         nativeBuildInputs = [ pkgs.cmake ];
+        nativeCheckInputs = [ pkgs.python3 ];
         doCheck = true;
 
         installPhase = ''
@@ -46,6 +47,7 @@
           cmake
           ninja
           clang-tools
+          python3
         ];
       };
     };
