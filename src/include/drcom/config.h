@@ -15,6 +15,7 @@ namespace drcom {
  */
 class Config {
 public:
+    Config() = default;
     static Config& getInstance();
     
     // User configuration
@@ -22,7 +23,7 @@ public:
         std::string username;
         std::string password;
         std::string ip;
-        std::array<uint8_t, 6> mac;
+        std::array<uint8_t, 6> mac{};
         std::string hostname;
         std::string os_info;
         std::string primary_dns{"0.0.0.0"};
@@ -32,13 +33,13 @@ public:
     // Server configuration
     struct ServerConfig {
         std::string ip;
-        uint16_t port;
+        uint16_t port{0};
     };
     
     // Client configuration  
     struct ClientConfig {
         std::string ip{"0.0.0.0"};
-        uint16_t port;
+        uint16_t port{0};
         bool debug_enabled{false};
         bool auto_reconnect{true};
         bool auto_identity{true};
@@ -91,21 +92,20 @@ public:
     
     // Validation
     bool validate() const;
+    const std::string& lastError() const { return last_error_; }
     
 private:
-    Config() = default;
-    ~Config() = default;
-    Config(const Config&) = delete;
-    Config& operator=(const Config&) = delete;
     
     UserConfig user_config_;
     ServerConfig server_config_;
     ClientConfig client_config_;
     ProtocolConfig protocol_config_;
     
+    mutable std::string last_error_;
+
     // Helper methods
     bool isValidIPAddress(const std::string& ip) const;
-    void parseMacAddress(const std::string& mac_str, std::array<uint8_t, 6>& mac) const;
+
 };
 
 } // namespace drcom

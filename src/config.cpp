@@ -1,36 +1,50 @@
 #include "drcom/config.h"
 
-#include <fstream>
-#include <iostream>
-#include <regex>
-#include <iomanip>
 #include <algorithm>
+#include <charconv>
 #include <cctype>
+#include <fstream>
+#include <iomanip>
+#include <limits>
+#include <unordered_map>
 
 namespace {
-
 std::string trimCopy(std::string value) {
     const auto begin = value.find_first_not_of(" \t\r\n");
-    if (begin == std::string::npos) {
-        return {};
+    if (begin == std::string::npos) return {};
+    return value.substr(begin, value.find_last_not_of(" \t\r\n") - begin + 1);
+}
+template<class T> bool parseNumber(const std::string& text, T& result, int base = 10) {
+    unsigned long long number{};
+    const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), number, base);
+    if (text.empty() || error != std::errc{} || end != text.data() + text.size() ||
+        number > std::numeric_limits<T>::max()) return false;
+    result = static_cast<T>(number);
+    return true;
+}
+bool parseBoolean(std::string text, bool& result) {
+    std::transform(text.begin(), text.end(), text.begin(),
+        [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    if (text == "true" || text == "1" || text == "yes" || text == "on") result = true;
+    else if (text == "false" || text == "0" || text == "no" || text == "off") result = false;
+    else return false;
+    return true;
+}
+bool parseMac(const std::string& text, std::array<uint8_t, 6>& result) {
+    const bool compact = text.size() == 12;
+    if (!compact && (text.size() != 17 || (text[2] != ':' && text[2] != '-'))) return false;
+    std::array<uint8_t, 6> parsed{};
+    for (size_t i = 0; i < parsed.size(); ++i) {
+        const size_t offset = i * (compact ? 2 : 3);
+        if (!compact && i && text[offset - 1] != text[2]) return false;
+        if (!parseNumber(text.substr(offset, 2), parsed[i], 16)) return false;
     }
-
-    const auto end = value.find_last_not_of(" \t\r\n");
-    return value.substr(begin, end - begin + 1);
+    result = parsed;
+    return true;
 }
-
-bool parseBoolean(const std::string& value) {
-    std::string normalized = trimCopy(value);
-    std::transform(normalized.begin(), normalized.end(), normalized.begin(),
-                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-    return normalized == "true" || normalized == "1" || normalized == "yes" ||
-           normalized == "on";
-}
-
-}  // namespace
+} // namespace
 
 namespace drcom {
-
 Config& Config::getInstance() {
     static Config instance;
     return instance;
@@ -38,99 +52,71 @@ Config& Config::getInstance() {
 
 bool Config::loadFromFile(const std::string& filename) {
     std::ifstream file(filename);
-    if (!file.is_open()) {
+    if (!file) { last_error_ = filename + ": cannot open configuration file"; return false; }
+    Config candidate;
+    std::unordered_map<std::string, size_t> locations;
+    std::string line;
+    size_t line_number = 0;
+    const auto fail = [&](const std::string& key, const std::string& message) {
+        last_error_ = filename + ":" + std::to_string(line_number) + ": " +
+                      (key.empty() ? "" : key + ": ") + message;
+        return false;
+    };
+    while (std::getline(file, line)) {
+        ++line_number;
+        if (line_number == 1 && line.starts_with("\xef\xbb\xbf")) line.erase(0, 3);
+        line = trimCopy(line);
+        if (line.empty() || line[0] == '#' || line[0] == ';') continue;
+        if (line.find('\0') != std::string::npos) return fail("", "NUL byte is not allowed");
+        if (line == "[User]" || line == "[Server]" || line == "[Client]") continue;
+        const auto equals = line.find('=');
+        if (equals == std::string::npos) return fail("", "expected key=value or a known section");
+        const std::string key = trimCopy(line.substr(0, equals));
+        std::string value = trimCopy(line.substr(equals + 1));
+        if (key.empty()) return fail("", "empty configuration key");
+        if (!locations.emplace(key, line_number).second) return fail(key, "duplicate configuration key");
+        if (!value.empty() && value.front() == '"') {
+            if (value.size() < 2 || value.back() != '"') return fail(key, "unterminated quoted value");
+            value = value.substr(1, value.size() - 2);
+        }
+        auto& user = candidate.user_config_;
+        auto& server = candidate.server_config_;
+        auto& client = candidate.client_config_;
+        auto& protocol = candidate.protocol_config_;
+        if (key == "username") user.username = value;
+        else if (key == "password") user.password = value;
+        else if (key == "ip") user.ip = value;
+        else if (key == "hostname") user.hostname = value;
+        else if (key == "os_info") user.os_info = value;
+        else if (key == "server_ip") server.ip = value;
+        else if (key == "client_ip") client.ip = value;
+        else if (key == "primary_dns") user.primary_dns = value;
+        else if (key == "dhcp_server") user.dhcp_server = value;
+        else if (key == "mac") {
+            if (!parseMac(value, user.mac)) return fail(key, "expected 12 hex digits or six hex pairs separated by ':' or '-'");
+        } else if (key == "server_port" || key == "client_port") {
+            auto& port = key == "server_port" ? server.port : client.port;
+            if (!parseNumber(value, port) || !port) return fail(key, "expected an integer from 1 to 65535");
+        } else if (key == "debug" || key == "auto_reconnect" || key == "auto_identity") {
+            auto& flag = key == "debug" ? client.debug_enabled :
+                         key == "auto_reconnect" ? client.auto_reconnect : client.auto_identity;
+            if (!parseBoolean(value, flag)) return fail(key, "expected true/false, yes/no, on/off, or 1/0");
+        } else if (key == "reconnect_interval" || key == "auth_interval" || key == "heartbeat_interval") {
+            auto& interval = key == "reconnect_interval" ? client.reconnect_interval :
+                             key == "auth_interval" ? protocol.auth_interval : protocol.heartbeat_interval;
+            if (!parseNumber(value, interval) || !interval)
+                return fail(key, "expected an integer from 1 to 4294967295 seconds");
+        } else return fail(key, "unknown configuration key");
+    }
+    if (file.bad()) return fail("", "error reading configuration file");
+    if (!candidate.validate()) {
+        const auto key = candidate.lastError().substr(0, candidate.lastError().find(':'));
+        const auto found = locations.find(key);
+        last_error_ = filename + (found == locations.end() ? "" : ":" + std::to_string(found->second)) +
+                      ": " + candidate.lastError();
         return false;
     }
-    
-    std::string line;
-    while (std::getline(file, line)) {
-        // Skip comments and empty lines
-        if (line.empty() || line[0] == '#' || line[0] == ';') {
-            continue;
-        }
-        
-        // Parse key=value pairs
-        auto eq_pos = line.find('=');
-        if (eq_pos == std::string::npos) {
-            continue;
-        }
-        
-        std::string key = line.substr(0, eq_pos);
-        std::string value = line.substr(eq_pos + 1);
-        
-        // Trim whitespace
-        key = trimCopy(key);
-        value = trimCopy(value);
-        if (key.empty()) {
-            continue;
-        }
-        
-        // Remove quotes if present
-        if (value.length() >= 2 && value.front() == '"' && value.back() == '"') {
-            value = value.substr(1, value.length() - 2);
-        }
-        
-        // Set configuration values
-        if (key == "username") {
-            user_config_.username = value;
-        } else if (key == "password") {
-            user_config_.password = value;
-        } else if (key == "ip") {
-            user_config_.ip = value;
-        } else if (key == "hostname") {
-            user_config_.hostname = value;
-        } else if (key == "os_info") {
-            user_config_.os_info = value;
-        } else if (key == "server_ip") {
-            server_config_.ip = value;
-        } else if (key == "server_port") {
-            try {
-                server_config_.port = static_cast<uint16_t>(std::stoul(value));
-            } catch (...) {
-                // Ignore invalid port values
-            }
-        } else if (key == "client_ip") {
-            client_config_.ip = value;
-        } else if (key == "client_port") {
-            try {
-                client_config_.port = static_cast<uint16_t>(std::stoul(value));
-            } catch (...) {
-                // Ignore invalid port values
-            }
-        } else if (key == "debug") {
-            client_config_.debug_enabled = parseBoolean(value);
-        } else if (key == "auto_reconnect") {
-            client_config_.auto_reconnect = parseBoolean(value);
-        } else if (key == "auto_identity") {
-            client_config_.auto_identity = parseBoolean(value);
-        } else if (key == "reconnect_interval") {
-            try {
-                client_config_.reconnect_interval = static_cast<uint32_t>(std::stoul(value));
-            } catch (...) {
-                // Ignore invalid values, keep default
-            }
-        } else if (key == "auth_interval") {
-            try {
-                protocol_config_.auth_interval = static_cast<uint32_t>(std::stoul(value));
-            } catch (...) {
-                // Ignore invalid values, keep default
-            }
-        } else if (key == "heartbeat_interval") {
-            try {
-                protocol_config_.heartbeat_interval = static_cast<uint32_t>(std::stoul(value));
-            } catch (...) {
-                // Ignore invalid values, keep default
-            }
-        } else if (key == "mac") {
-            // Parse MAC address in format "00:11:22:33:44:55" or "00-11-22-33-44-55"
-            parseMacAddress(value, user_config_.mac);
-        } else if (key == "primary_dns") {
-            user_config_.primary_dns = value;
-        } else if (key == "dhcp_server") {
-            user_config_.dhcp_server = value;
-        }
-    }
-    
+    *this = std::move(candidate); // Failed loads never partially replace the active configuration.
     return true;
 }
 
@@ -144,13 +130,13 @@ bool Config::saveToFile(const std::string& filename) const {
     file << "# Generated automatically\n\n";
     
     file << "[User]\n";
-    file << "username=" << user_config_.username << "\n";
-    file << "password=" << user_config_.password << "\n";
-    file << "ip=" << user_config_.ip << "\n";
-    file << "hostname=" << user_config_.hostname << "\n";
-    file << "os_info=" << user_config_.os_info << "\n";
-    file << "primary_dns=" << user_config_.primary_dns << "\n";
-    file << "dhcp_server=" << user_config_.dhcp_server << "\n";
+    file << "username=\"" << user_config_.username << "\"\n";
+    file << "password=\"" << user_config_.password << "\"\n";
+    file << "ip=\"" << user_config_.ip << "\"\n";
+    file << "hostname=\"" << user_config_.hostname << "\"\n";
+    file << "os_info=\"" << user_config_.os_info << "\"\n";
+    file << "primary_dns=\"" << user_config_.primary_dns << "\"\n";
+    file << "dhcp_server=\"" << user_config_.dhcp_server << "\"\n";
     
     // Format MAC address
     file << "mac=";
@@ -175,83 +161,52 @@ bool Config::saveToFile(const std::string& filename) const {
     file << "auth_interval=" << protocol_config_.auth_interval << "\n";
     file << "heartbeat_interval=" << protocol_config_.heartbeat_interval << "\n";
     
-    return true;
+    file.close();
+    return static_cast<bool>(file);
 }
 
 bool Config::validate() const {
-    // Validate username
-    if (user_config_.username.empty()) {
+    last_error_.clear();
+    const auto fail = [&](const std::string& key, const std::string& message) {
+        last_error_ = key + ": " + message;
         return false;
+    };
+    if (user_config_.username.empty() || user_config_.username.size() > 36)
+        return fail("username", "must contain 1 to 36 bytes");
+    for (const auto* value : {&user_config_.username, &user_config_.password, &user_config_.hostname, &user_config_.os_info}) {
+        if (value->find_first_of(std::string("\r\n\0", 3)) != std::string::npos)
+            return fail("user", "text fields cannot contain newline or NUL bytes");
     }
-    
-    // Validate password
-    if (user_config_.password.empty()) {
-        return false;
+    if (user_config_.password.empty()) return fail("password", "must not be empty");
+    // Keep the encoded login datagram within the maximum IPv4 UDP payload.
+    if ((user_config_.password.size() - 1) / 4 > (65507 - 334) / 4)
+        return fail("password", "encoded login packet exceeds the UDP payload limit");
+    if (user_config_.hostname.size() > 32) return fail("hostname", "must not exceed 32 bytes");
+    if (user_config_.os_info.size() > 54) return fail("os_info", "must not exceed 54 bytes");
+    for (const auto& [key, value] : {std::pair{"ip", user_config_.ip},
+         {"server_ip", server_config_.ip}, {"client_ip", client_config_.ip},
+         {"primary_dns", user_config_.primary_dns}, {"dhcp_server", user_config_.dhcp_server}}) {
+        if (!(key == std::string("client_ip") && value.empty()) && !isValidIPAddress(value)) return fail(key, "expected an IPv4 address with four decimal octets");
     }
-    
-    // Validate IP address format
-    if (!isValidIPAddress(user_config_.ip)) {
-        return false;
-    }
-    
-    if (!isValidIPAddress(server_config_.ip)) {
-        return false;
-    }
-
-    if (!client_config_.ip.empty() && !isValidIPAddress(client_config_.ip)) {
-        return false;
-    }
-
-    if (!user_config_.primary_dns.empty() && !isValidIPAddress(user_config_.primary_dns)) {
-        return false;
-    }
-
-    if (!user_config_.dhcp_server.empty() && !isValidIPAddress(user_config_.dhcp_server)) {
-        return false;
-    }
-    
-    // Validate ports
-    if (server_config_.port == 0 || client_config_.port == 0) {
-        return false;
-    }
-
-    if (client_config_.reconnect_interval == 0) {
-        return false;
-    }
-
-    if (protocol_config_.auth_interval == 0 || protocol_config_.heartbeat_interval == 0) {
-        return false;
-    }
-    
+    if (!server_config_.port) return fail("server_port", "must be specified and nonzero");
+    if (!client_config_.port) return fail("client_port", "must be specified and nonzero");
+    if (!client_config_.reconnect_interval) return fail("reconnect_interval", "must be nonzero");
+    if (!protocol_config_.auth_interval) return fail("auth_interval", "must be nonzero");
+    if (!protocol_config_.heartbeat_interval) return fail("heartbeat_interval", "must be nonzero");
     return true;
 }
 
 bool Config::isValidIPAddress(const std::string& ip) const {
-    std::regex ip_regex(
-        R"(^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$)"
-    );
-    return std::regex_match(ip, ip_regex);
-}
-
-void Config::parseMacAddress(const std::string& mac_str, std::array<uint8_t, 6>& mac) const {
-    std::string clean_mac = mac_str;
-    
-    // Remove separators
-    clean_mac.erase(std::remove(clean_mac.begin(), clean_mac.end(), ':'), clean_mac.end());
-    clean_mac.erase(std::remove(clean_mac.begin(), clean_mac.end(), '-'), clean_mac.end());
-    
-    if (clean_mac.length() != 12) {
-        return; // Invalid MAC address
+    size_t start = 0;
+    for (unsigned i = 0; i < 4; ++i) {
+        const auto end = ip.find('.', start);
+        if ((end == std::string::npos) != (i == 3)) return false;
+        const auto octet = ip.substr(start, end == std::string::npos ? end : end - start);
+        uint8_t parsed{};
+        // inet_pton and the packet encoder must agree; reject ambiguous leading zeros.
+        if ((octet.size() > 1 && octet[0] == '0') || !parseNumber(octet, parsed)) return false;
+        start = end + 1;
     }
-    
-    for (size_t i = 0; i < 6; ++i) {
-        std::string byte_str = clean_mac.substr(i * 2, 2);
-        try {
-            mac[i] = static_cast<uint8_t>(std::stoul(byte_str, nullptr, 16));
-        } catch (...) {
-            mac[i] = 0; // Default to 0 on error
-        }
-    }
+    return true;
 }
-
 } // namespace drcom

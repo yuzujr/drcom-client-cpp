@@ -503,16 +503,16 @@ int main(int argc, char* argv[]) {
         // Load configuration
         auto& config = drcom::Config::getInstance();
         if (!config.loadFromFile(config_file)) {
-            g_runtime.last_failure = "Could not load configuration file";
+            g_runtime.last_failure = config.lastError();
             publishState("error");
-            logger.error("Could not load config file '{}'", config_file);
+            logger.error("Configuration error: {}", config.lastError());
             return 1;
         }
 
         if (!config.validate()) {
-            g_runtime.last_failure = "Configuration validation failed";
+            g_runtime.last_failure = config.lastError();
             publishState("error");
-            logger.error("Configuration validation failed");
+            logger.error("Configuration error: {}", config.lastError());
             return 1;
         }
 
