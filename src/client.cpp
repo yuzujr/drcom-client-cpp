@@ -98,10 +98,10 @@ bool DrcomClient::shouldReconnect() const {
         case DisconnectReason::NETWORK_ERROR:
         case DisconnectReason::KEEPALIVE_FAILURE:
         case DisconnectReason::SERVER_DISCONNECT:
+        case DisconnectReason::PROTOCOL_ERROR:
             return true;
         case DisconnectReason::NONE:
         case DisconnectReason::AUTH_FAILURE:
-        case DisconnectReason::PROTOCOL_ERROR:
             return false;
         default:
             return false;
@@ -190,11 +190,10 @@ bool DrcomClient::connect() {
             stats_.connected_since = std::chrono::system_clock::now();
         }
         
-        // Start the keep-alive scheduler
-        startKeepaliveThread();
-        
+        // Publish success before the worker can report a maintenance failure.
         setState(ClientState::KEEPALIVE);
         notifyEvent(ClientEvent::AUTH_SUCCESS, "Successfully authenticated");
+        startKeepaliveThread();
         
         return true;
         
@@ -255,8 +254,7 @@ bool DrcomClient::disconnect() {
 
 void DrcomClient::sendKeepalive() {
     if (isConnected()) {
-        sendKeepAliveAuth();
-        sendKeepAliveHeartbeat();
+        if (sendKeepAliveAuth()) sendKeepAliveHeartbeat();
     }
 }
 
@@ -417,6 +415,8 @@ void DrcomClient::keepaliveWorker() {
 }
 
 bool DrcomClient::sendKeepAliveAuth() {
+    std::lock_guard<std::mutex> exchange_lock(keepalive_exchange_mutex_);
+    if (!isConnected() || stop_threads_) return false;
     logger_.debug("Sending keep-alive auth");
     
     auto packet = buildKeepAliveAuthPacket();
@@ -454,6 +454,8 @@ bool DrcomClient::sendKeepAliveAuth() {
 }
 
 bool DrcomClient::sendKeepAliveHeartbeat() {
+    std::lock_guard<std::mutex> exchange_lock(keepalive_exchange_mutex_);
+    if (!isConnected() || stop_threads_) return false;
     logger_.debug("Sending keep-alive heartbeat");
     
     bool is_first = (heartbeat_counter_ == 0);
@@ -605,7 +607,7 @@ bool DrcomClient::handleLoginResponse(const std::vector<uint8_t>& data,
                                       DisconnectReason* disconnect_reason) {
     logger_.logAuthReceive(data);
 
-    if (data.size() < 39) {
+    if (data.size() < 2) {
         if (error_message) {
             *error_message = std::format("Login response too short: {} bytes", data.size());
         }
@@ -635,6 +637,11 @@ bool DrcomClient::handleLoginResponse(const std::vector<uint8_t>& data,
         return false;
     }
     
+    if (data.size() < 39) {
+        if (error_message) *error_message = "Successful login response too short";
+        if (disconnect_reason) *disconnect_reason = DisconnectReason::PROTOCOL_ERROR;
+        return false;
+    }
     // Extract server indicators
     std::copy(data.begin() + 23, data.begin() + 39, session_.server_drcom_indicator.begin());
     return true;
@@ -788,19 +795,44 @@ bool DrcomClient::sendAndReceive(const std::vector<uint8_t>& send_data,
         stats_.bytes_sent += sent;
     }
     
-    // Receive response
-    auto [received, recv_error] = socket_->receiveInterruptibly(receive_data, timeout_ms, cancellation_callback_);
-    if (recv_error) {
-        logger_.debug("Receive failed: {}", recv_error.message());
-        if (error_message) {
-            *error_message = std::format("Receive failed: {}", recv_error.message());
+    // Ignore complete responses from other exchanges, without extending the
+    // deadline. The 0x07 auth/heartbeat formats overlap; do not guess a sequence
+    // correlation rule without evidence from a real server.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+    const auto request = send_data.at(0);
+    const bool maintenance = request == 0xff || request == 0x07;
+    const auto cancelled = [this, maintenance] {
+        return (maintenance && stop_threads_.load()) ||
+               (cancellation_callback_ && cancellation_callback_());
+    };
+    for (;;) {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now()).count();
+        if (remaining <= 0) {
+            if (error_message) *error_message = "Receive deadline exceeded";
+            return false;
         }
-        return false;
-    }
-    
-    {
-        std::lock_guard<std::mutex> lock(stats_mutex_);
-        stats_.bytes_received += received;
+        auto [received, recv_error] = socket_->receiveInterruptibly(
+            receive_data, static_cast<int>(remaining), cancelled);
+        if (recv_error) {
+            if (error_message) *error_message = std::format("Receive failed: {}", recv_error.message());
+            return false;
+        }
+        {
+            std::lock_guard<std::mutex> lock(stats_mutex_);
+            stats_.bytes_received += received;
+        }
+        if (receive_data.empty()) break; // Let validation diagnose malformed input.
+        const auto type = receive_data[0];
+        const bool known = (type == 0x02 && receive_data.size() >= 8) ||
+            ((type == 0x04 || type == 0x05 || type == 0xff) && receive_data.size() >= 2) ||
+            (type == 0x07 && receive_data.size() >= 20);
+        const bool expected = (request == 0x01 && type == 0x02) ||
+            (request == 0x03 && type == 0x04) || (request == 0x06 && type == 0x05) ||
+            (request == 0xff && (type == 0xff || type == 0x07)) ||
+            (request == 0x07 && type == 0x07);
+        if (!known || expected) break;
+        logger_.debug("Discarded stale response type 0x{:02x}", type);
     }
     return true;
 }

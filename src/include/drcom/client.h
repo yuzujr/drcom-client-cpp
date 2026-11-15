@@ -186,6 +186,7 @@ private:
     std::condition_variable stop_cv_;
     std::mutex stop_mutex_;
     std::mutex socket_io_mutex_;
+    std::mutex keepalive_exchange_mutex_;
     
     // Internal methods
     void setState(ClientState new_state);

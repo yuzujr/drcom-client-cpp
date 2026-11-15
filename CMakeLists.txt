@@ -41,6 +41,9 @@ if(BUILD_TESTING)
     if(Python3_Interpreter_FOUND)
         add_test(NAME protocol_oracle COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_SOURCE_DIR}/tests/protocol_oracle.py $<TARGET_FILE:protocol_vectors>)
+        add_test(NAME fault_recovery COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_SOURCE_DIR}/tests/fault_recovery.py $<TARGET_FILE:drcom_client>)
+        set_tests_properties(fault_recovery PROPERTIES TIMEOUT 60 LABELS integration)
     endif()
     add_executable(config_tests tests/config.cpp)
     target_link_libraries(config_tests PRIVATE drcom_core)

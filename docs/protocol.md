@@ -29,3 +29,20 @@ can contain usernames, MAC/IP addresses and password-derived data; removing
 only plaintext passwords does not make a capture suitable for publication.
 Use synthetic credentials and reproducible synthetic fixtures for the public
 repository. Keep raw captures outside version control.
+
+## Recovery boundaries
+
+Malformed responses and transport/maintenance failures reconnect with bounded
+backoff when automatic reconnect is enabled. A login response beginning `04` and
+an explicit nonzero status is an authentication refusal and stops retries,
+including a two-byte refusal. A successful response still requires 39 bytes.
+Complete responses from a different exchange type are discarded within the
+original deadline. Auth and heartbeat replies both use `07`; their sequence
+correlation is deliberately not tightened without real-server evidence.
+
+`tests/fault_recovery.py` injects truncated challenge/login replies, dropped
+maintenance replies, stale packets, explicit refusal, and cancellation while
+waiting for a valid reply. It uses its own UDP server rather than the project
+mock. Client lifecycle calls (`connect`, `disconnect`, `stop`) must be owned by
+one caller; callbacks must not call lifecycle methods from the worker thread.
+Manual keepalive exchanges are serialized with scheduled exchanges.
