@@ -31,6 +31,13 @@ uint8_t randomByte() {
 
     return static_cast<uint8_t>(distribution(generator));
 }
+
+std::string receiveErrorMessage(const std::error_code& error) {
+    if (error == std::make_error_code(std::errc::timed_out)) {
+        return "Connection timed out";
+    }
+    return error.message();
+}
 }  // namespace
 
 // ================= Helper Functions =================
@@ -815,7 +822,9 @@ bool DrcomClient::sendAndReceive(const std::vector<uint8_t>& send_data,
         auto [received, recv_error] = socket_->receiveInterruptibly(
             receive_data, static_cast<int>(remaining), cancelled);
         if (recv_error) {
-            if (error_message) *error_message = std::format("Receive failed: {}", recv_error.message());
+            if (error_message) {
+                *error_message = std::format("Receive failed: {}", receiveErrorMessage(recv_error));
+            }
             return false;
         }
         {
